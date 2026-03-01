@@ -21,7 +21,7 @@ categories = [
 ]
 
 news_list = []
-seen_links = set()  # 去重追踪
+seen_links = set()
 
 for cat in categories:
     url = "https://newsdata.io/api/1/latest"
@@ -29,7 +29,7 @@ for cat in categories:
         'apikey': NEWSDATA_API_KEY,
         'q': cat['q'],
         'language': 'zh',
-        'size': 5,               # 多取筛选
+        'size': 5,
         'removeduplicate': '1'
     }
     try:
@@ -40,7 +40,7 @@ for cat in categories:
 
         valid_count = 0
         for art in data['results']:
-            if valid_count >= 2:  # 严格2条/板块
+            if valid_count >= 2:
                 break
             link = art.get('link', '')
             if link in seen_links:
@@ -106,7 +106,7 @@ if len(news_list) < 14:
 
 print(f"收集到新闻：{len(news_list)} 条")
 
-# 通义千问处理（字数再压）
+# 通义千问处理 ── 强制简体中文（除官方摘要外）
 def qwen_process(item):
     text = f"语言：{item['lang']} 分类：{item['category']} 标题：{item['title']} 摘要：{item['desc'][:200]}"
 
@@ -122,11 +122,12 @@ def qwen_process(item):
                 {
                     "role": "system",
                     "content": (
-                        "你是一位资深中文时政/财经类报纸副总编辑。用**简体中文**处理新闻，输出**严格**遵循以下格式，不得多余文字、空格、符号：\n\n"
-                        "【官方摘要】\n不超过160字的精炼中文摘要（若原文非中文则先翻译再浓缩）\n\n"
-                        "【专业解析】\n客观中性、社论风格，110–130字，2段\n\n"
-                        "【白话解析】\n通俗接地气，像给朋友讲，90–110字，2段\n\n"
-                        "禁止出现 markdown、代码、列表、感叹号滥用、口语化标题等。"
+                        "你是一位资深中文报纸副总编辑。处理新闻时**必须**使用**简体中文**输出，除【官方摘要】可能保留原文轻微繁体/英文专有名词外，【专业解析】和【白话解析】两段**强制全部使用简体中文**，即使原文是繁体或英文。\n\n"
+                        "输出严格格式，不得多余文字、空格、符号：\n\n"
+                        "【官方摘要】\n不超过160字的精炼中文摘要（若非中文则翻译后浓缩）\n\n"
+                        "【专业解析】\n客观中性、社论风格，110–130字，2段，必须简体中文\n\n"
+                        "【白话解析】\n通俗接地气，像聊天解释，90–110字，2段，必须简体中文\n\n"
+                        "禁止markdown、列表、感叹号滥用、口语化标题。"
                     )
                 },
                 {"role": "user", "content": f"处理这条新闻：{text}"}
@@ -147,7 +148,7 @@ def qwen_process(item):
         print(f"Qwen 异常: {e}")
         return "【官方摘要】\n（解析服务异常）\n【专业解析】\n暂无\n【白话解析】\n暂无"
 
-# HTML 构建 —— 苹果官网式高级电子报风格
+# HTML 构建 ── 手机端宽度优化 + 高级感
 today = datetime.now().strftime('%Y年%m月%d日')
 
 msg = f"""<!DOCTYPE html>
@@ -157,41 +158,43 @@ msg = f"""<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>每日新闻早报 {today}</title>
 <style>
-    body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif; background:#f8f9fa; color:#1a1a1a; line-height:1.7; margin:0; padding:20px 10px; scroll-behavior:smooth; }}
-    .container {{ max-width:920px; margin:0 auto; background:white; border-radius:16px; overflow:hidden; box-shadow:0 12px 40px rgba(0,0,0,0.1); }}
-    .header {{ background:linear-gradient(135deg, #1e3a8a, #3b82f6); color:white; padding:40px 28px 24px; text-align:center; }}
-    .header h1 {{ margin:0; font-size:32px; font-weight:700; letter-spacing:0.8px; }}
-    .header .date {{ margin:10px 0 0; font-size:16px; opacity:0.92; }}
-    .content {{ padding:28px; }}
-    h2 {{ color:#111827; font-size:24px; font-weight:700; margin:40px 0 20px; padding-left:14px; border-left:6px solid #3b82f6; }}
-    .card {{ background:#ffffff; border:1px solid #e5e7eb; border-radius:12px; margin-bottom:28px; overflow:hidden; box-shadow:0 6px 16px rgba(0,0,0,0.06); transition:box-shadow 0.3s ease, transform 0.3s ease; }}
-    .card:hover {{ box-shadow:0 12px 28px rgba(0,0,0,0.12); transform:translateY(-4px); }}
-    .card img {{ width:100%; max-height:220px; object-fit:cover; display:block; }}
-    .card-body {{ padding:24px 26px; }}
-    .title {{ font-size:21px; font-weight:700; color:#111827; margin:0 0 16px; line-height:1.45; white-space:normal; word-break:break-word; }}
-    .section {{ font-size:15.5px; color:#4b5563; margin:16px 0; }}
-    .section strong {{ color:#1e40af; font-weight:600; }}
-    .link {{ display:block; text-align:right; margin-top:14px; font-size:14.5px; }}
+    body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; background:#f9fafb; color:#111827; line-height:1.75; margin:0; padding:12px 8px; }}
+    .container {{ max-width:920px; margin:0 auto; background:#ffffff; border-radius:16px; overflow:hidden; box-shadow:0 10px 38px rgba(0,0,0,0.08); }}
+    .header {{ background:linear-gradient(135deg, #1d4ed8, #60a5fa); color:white; padding:44px 24px 24px; text-align:center; }}
+    .header h1 {{ margin:0; font-size:30px; font-weight:700; letter-spacing:0.6px; }}
+    .header .date {{ margin:12px 0 0; font-size:15.5px; opacity:0.94; }}
+    .content {{ padding:24px 20px; }}
+    h2 {{ color:#111827; font-size:23px; font-weight:700; margin:36px 0 18px; padding-left:12px; border-left:5px solid #3b82f6; }}
+    .card {{ background:#ffffff; border:1px solid #e5e7eb; border-radius:12px; margin-bottom:28px; overflow:hidden; transition:border-color 0.25s ease; }}
+    .card:hover {{ border-color:#bfdbfe; }}
+    .card img {{ width:100%; max-height:210px; object-fit:cover; display:block; }}
+    .card-body {{ padding:24px; }}
+    .title {{ font-size:20.5px; font-weight:700; color:#111827; margin:0 0 16px; line-height:1.42; white-space:normal; word-break:break-word; }}
+    .section {{ font-size:15.2px; color:#4b5563; margin:16px 0; }}
+    .section strong {{ color:#1d4ed8; font-weight:600; }}
+    .link {{ text-align:right; margin-top:12px; font-size:14.2px; }}
     .link a {{ color:#2563eb; text-decoration:none; font-weight:500; }}
     .link a:hover {{ text-decoration:underline; }}
-    .footer {{ background:#f1f5f9; padding:24px; text-align:center; font-size:13.5px; color:#6b7280; border-top:1px solid #e5e7eb; }}
-    /* 响应式：小屏适应 */
+    .footer {{ background:#f1f5f9; padding:20px; text-align:center; font-size:13px; color:#6b7280; border-top:1px solid #e5e7eb; }}
+    
+    /* 手机端优化：撑满宽度 + 更舒适间距 */
     @media (max-width: 768px) {{
+        body {{ padding:8px 4px; }}
         .container {{ max-width:100%; border-radius:0; box-shadow:none; }}
-        .header {{ padding:32px 20px 18px; }}
-        .header h1 {{ font-size:28px; }}
-        .content {{ padding:20px; }}
-        h2 {{ font-size:22px; margin:32px 0 16px; }}
-        .card {{ margin-bottom:24px; }}
-        .card-body {{ padding:20px 22px; }}
+        .header {{ padding:36px 18px 20px; }}
+        .header h1 {{ font-size:26px; }}
+        .content {{ padding:18px 16px; }}
+        h2 {{ font-size:21px; margin:28px 0 16px; }}
+        .card {{ margin-bottom:24px; border-radius:10px; }}
+        .card-body {{ padding:22px 24px; }}  /* 左右padding加大，撑满感更强 */
         .title {{ font-size:19px; }}
         .section {{ font-size:15px; margin:14px 0; }}
+        .link {{ font-size:13.8px; }}
     }}
     @media (max-width: 480px) {{
-        body {{ padding:10px 5px; }}
-        .header h1 {{ font-size:24px; }}
-        .title {{ font-size:18px; }}
-        .section {{ font-size:14.5px; }}
+        .card-body {{ padding:20px 22px; }}
+        .title {{ font-size:18.2px; }}
+        .section {{ font-size:14.6px; }}
     }}
 </style>
 </head>
@@ -199,7 +202,7 @@ msg = f"""<!DOCTYPE html>
 <div class="container">
     <div class="header">
         <h1>每日新闻早报</h1>
-        <div class="date">{today}　全球主流媒体精选</div>
+        <div class="date">{today}　全球精选要闻</div>
     </div>
     <div class="content">
 """
@@ -212,7 +215,6 @@ for item in news_list:
 
     parsed = qwen_process(item)
 
-    # 健壮拆分
     parts = parsed.replace('\n\n', '\n').split('【')
     official = professional = vernacular = "（解析异常）"
 
@@ -225,7 +227,7 @@ for item in news_list:
         elif p.startswith('白话解析】'):
             vernacular = p.replace('白话解析】', '').strip()[:110]
 
-    img_tag = f'<img src="{item["img_url"]}" alt="新闻配图" onerror="this.style.display=\'none\';">' if item['img_url'] else ''
+    img_tag = f'<img src="{item["img_url"]}" alt="配图" onerror="this.style.display=\'none\';">' if item['img_url'] else ''
 
     msg += f"""
         <div class="card">
@@ -244,17 +246,16 @@ msg += """
     </div>
     <div class="footer">
         <p>来源：NewsData.io 聚合（Reuters / BBC / 新华社 / 财新 / 澎湃等）</p>
-        <p>每日北京时间早8:30推送　欢迎反馈</p>
+        <p>每日北京时间早8:30推送　欢迎提出改进建议</p>
     </div>
 </div>
 </body>
 </html>
 """
 
-# 内容长度估算（调试用）
-print(f"HTML 内容约 {len(msg.encode('utf-8')) / 1024:.2f} KB")
+print(f"HTML 内容约 {len(msg.encode('utf-8')) / 1024:.1f} KB")
 
-# 推送到 PushPlus
+# PushPlus 发送
 push_url = "https://www.pushplus.plus/send"
 payload = {
     "token": PUSHPLUS_TOKEN,
@@ -267,21 +268,19 @@ success = False
 for attempt in range(1, 4):
     try:
         r = requests.post(push_url, json=payload, timeout=20)
-        print(f"推送尝试 {attempt} | 状态码: {r.status_code}")
-        print("返回:", r.text[:300])
-        if r.status_code == 200:
-            j = r.json()
-            if j.get("code") in (200, 0) or "成功" in r.text:
-                print("推送成功")
-                success = True
-                break
+        print(f"推送尝试 {attempt} | 状态: {r.status_code}")
+        print("返回:", r.text[:280])
+        if r.status_code == 200 and ('code":200' in r.text or '成功' in r.text):
+            print("推送成功")
+            success = True
+            break
     except Exception as e:
         print(f"推送异常 {attempt}: {e}")
     if attempt < 3:
-        time.sleep(10)
+        time.sleep(8)
 
 if not success:
-    print("推送未确认成功（但脚本已完成）")
+    print("推送未确认成功")
     with open("last_news.html", "w", encoding="utf-8") as f:
         f.write(msg)
 
