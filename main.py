@@ -4,21 +4,20 @@ import json
 import time
 from datetime import datetime
 
-# 从 GitHub Secrets 获取密钥
+# 从环境变量获取密钥
 NEWSDATA_API_KEY = os.getenv('NEWSDATA_API_KEY')
 QWEN_API_KEY = os.getenv('QWEN_API_KEY')
 PUSHPLUS_TOKEN = os.getenv('PUSHPLUS_TOKEN')
 
-# 新闻板块定义（每个板块目标至少2条）
 categories = [
-    {'cn': '国际政治', 'q': '中国 OR China OR world politics OR international relations OR geopolitics'},
-    {'cn': '财经经济', 'q': '中国经济 OR China economy OR global market OR finance OR stock OR trade'},
-    {'cn': '科技前沿', 'q': '中国科技 OR AI China OR tech innovation OR semiconductor OR quantum'},
-    {'cn': '体育赛事', 'q': '中国体育 OR world sports OR Olympics OR football OR basketball OR tennis'},
-    {'cn': '文化娱乐', 'q': '中国文化 OR global culture OR entertainment OR movie OR music OR festival'},
-    {'cn': '社会民生', 'q': '中国社会 OR China society OR livelihood OR education OR housing OR employment'},
-    {'cn': '健康医疗', 'q': '中国医疗 OR health China OR medicine OR public health OR vaccine OR aging'},
-    {'cn': '环境气候', 'q': '中国环境 OR climate change OR carbon neutral OR ecology OR pollution OR renewable energy'}
+    {'cn': '国际政治',     'q': '中国 OR China OR world politics OR geopolitics OR Taiwan OR Ukraine'},
+    {'cn': '财经经济',     'q': '中国经济 OR China economy OR global market OR finance OR trade war'},
+    {'cn': '科技前沿',     'q': '中国科技 OR AI China OR chip OR semiconductor OR quantum OR Huawei'},
+    {'cn': '体育赛事',     'q': '中国体育 OR Olympics OR football OR basketball OR 奥运 OR 世界杯'},
+    {'cn': '文化娱乐',     'q': '中国文化 OR entertainment OR movie OR music OR festival OR celebrity'},
+    {'cn': '社会民生',     'q': '中国社会 OR education OR housing OR employment OR population OR 民生'},
+    {'cn': '健康医疗',     'q': '中国医疗 OR health China OR cancer OR vaccine OR aging OR 疫情'},
+    {'cn': '环境气候',     'q': '中国环境 OR climate change OR carbon OR renewable OR 碳中和 OR pollution'}
 ]
 
 news_list = []
@@ -29,76 +28,81 @@ for cat in categories:
         'apikey': NEWSDATA_API_KEY,
         'q': cat['q'],
         'language': 'zh',
-        'size': 3,
+        'size': 5,               # 多取一点，筛选更严格
         'removeduplicate': '1'
     }
-
     try:
-        resp = requests.get(url, params=params, timeout=18)
+        resp = requests.get(url, params=params, timeout=15)
         data = resp.json()
+        if data.get('status') != 'success' or not data.get('results'):
+            continue
 
-        if data.get('status') == 'success' and data.get('results'):
-            valid_articles = []
-            for art in data['results'][:3]:
-                title = art.get('title', '').strip()
-                desc = (art.get('description') or art.get('content', '')).strip()[:320]
-                link = art.get('link', '')
-                img_url = art.get('image_url', '')
+        valid_count = 0
+        for art in data['results']:
+            if valid_count >= 2:          # 每个板块最多2条
+                break
+            title = (art.get('title') or '').strip()
+            desc = (art.get('description') or art.get('content') or '').strip()
+            link = art.get('link', '')
+            img_url = art.get('image_url', '')
 
-                if len(title) > 8 and len(desc) > 30 and 'http' in link:
-                    valid_articles.append({
-                        'category': cat['cn'],
-                        'title': title,
-                        'desc': desc,
-                        'link': link,
-                        'img_url': img_url if img_url and img_url.startswith('https://') else '',
-                        'lang': art.get('language', 'zh')
-                    })
+            if len(title) < 10 or len(desc) < 40 or 'http' not in link:
+                continue
+            if len(title) > 80:           # 标题太长截断
+                title = title[:78] + '…'
 
-            if len(valid_articles) >= 2:
-                news_list.extend(valid_articles[:3])
-            else:
-                news_list.extend(valid_articles)
+            news_list.append({
+                'category': cat['cn'],
+                'title': title,
+                'desc': desc[:280],
+                'link': link,
+                'img_url': img_url if img_url and img_url.startswith('https') else '',
+                'lang': art.get('language', 'zh')
+            })
+            valid_count += 1
 
     except Exception as e:
-        print(f"板块 {cat['cn']} 获取失败: {e}")
+        print(f"[{cat['cn']}] 获取失败: {e}")
 
-# 全局补齐，确保总新闻 ≥15 条
-if len(news_list) < 15:
+# 补齐（目标总数 14~18 条）
+if len(news_list) < 14:
     extra_params = {
         'apikey': NEWSDATA_API_KEY,
-        'q': '中国 OR China OR world news OR global hot OR breaking',
-        'size': 20,
-        'language': 'zh'
+        'q': '中国 OR China OR 热点 OR 要闻',
+        'language': 'zh',
+        'size': 15
     }
     try:
-        resp = requests.get("https://newsdata.io/api/1/latest", params=extra_params, timeout=18)
+        resp = requests.get("https://newsdata.io/api/1/latest", params=extra_params, timeout=15)
         data = resp.json()
         if data.get('status') == 'success' and data.get('results'):
             for art in data['results']:
-                if len(news_list) >= 20:
+                if len(news_list) >= 18:
                     break
-                title = art.get('title', '').strip()
-                desc = (art.get('description') or art.get('content', '')).strip()[:320]
-                link = art.get('link', '')
-                img_url = art.get('image_url', '')
-
-                if len(title) > 8 and len(desc) > 30 and 'http' in link:
-                    if not any(n['link'] == link for n in news_list):
-                        news_list.append({
-                            'category': '综合要闻',
-                            'title': title,
-                            'desc': desc,
-                            'link': link,
-                            'img_url': img_url if img_url and img_url.startswith('https://') else '',
-                            'lang': art.get('language', 'zh')
-                        })
+                title = (art.get('title') or '').strip()
+                if len(title) < 12:
+                    continue
+                if any(n['link'] == art.get('link') for n in news_list):
+                    continue
+                news_list.append({
+                    'category': '综合要闻',
+                    'title': title[:78] + '…' if len(title) > 80 else title,
+                    'desc': (art.get('description') or art.get('content') or '')[:260],
+                    'link': art.get('link', ''),
+                    'img_url': art.get('image_url', ''),
+                    'lang': art.get('language', 'zh')
+                })
     except Exception as e:
-        print(f"全局补齐失败: {e}")
+        print(f"补齐失败: {e}")
 
-# 通义千问处理函数
+print(f"收集到新闻：{len(news_list)} 条")
+
+# ────────────────────────────────────────────────
+# 通义千问处理（加强长度控制）
+# ────────────────────────────────────────────────
 def qwen_process(item):
-    text = f"语言：{item['lang']} 分类：{item['category']} 标题：{item['title']} 摘要：{item['desc']}"
+    text = f"语言：{item['lang']} 分类：{item['category']} 标题：{item['title']} 摘要：{item['desc'][:220]}"
+
     url = "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation"
     headers = {
         "Authorization": f"Bearer {QWEN_API_KEY}",
@@ -111,96 +115,126 @@ def qwen_process(item):
                 {
                     "role": "system",
                     "content": (
-                        "你是一位资深中文报纸编辑。用简体中文处理新闻：\n"
-                        "1. 如果原文非中文，先给出简洁的中文翻译作为官方摘要（标题+核心内容）。否则，直接用原文摘要作为官方摘要。\n"
-                        "2. 撰写专业解析（专家视角）：客观、中性、深入分析背景、影响，风格如社论，字数120-180字，分2-3段。\n"
-                        "3. 撰写白话解析（普通人视角）：通俗易懂、接地气、像聊天解释，字数100-150字，分2-3段。\n"
-                        "只输出以下严格格式，无任何前缀、多余符号或说明：\n"
-                        "【官方摘要】\n正文\n"
-                        "【专业解析】\n正文\n"
-                        "【白话解析】\n正文"
+                        "你是一位资深中文时政/财经类报纸副总编辑。用**简体中文**处理新闻，输出**严格**遵循以下格式，不得多余文字、空格、符号：\n\n"
+                        "【官方摘要】\n不超过180字的精炼中文摘要（若原文非中文则先翻译再浓缩）\n\n"
+                        "【专业解析】\n客观中性、社论风格，120–140字，2段\n\n"
+                        "【白话解析】\n通俗接地气，像给朋友讲，100–120字，2段\n\n"
+                        "禁止出现 markdown、代码、列表、感叹号滥用、口语化标题等。"
                     )
                 },
                 {"role": "user", "content": f"处理这条新闻：{text}"}
             ]
         },
-        "parameters": {"max_tokens": 650, "temperature": 0.7}
+        "parameters": {
+            "max_tokens": 480,
+            "temperature": 0.65,
+            "top_p": 0.92
+        }
     }
     try:
-        r = requests.post(url, headers=headers, json=body, timeout=28)
+        r = requests.post(url, headers=headers, json=body, timeout=25)
         result = r.json()
-        output = result.get("output", {}).get("text", "解析失败").strip()
-        return output
+        output = result.get("output", {}).get("text", "").strip()
+        return output if output else "解析失败"
     except Exception as e:
-        print(f"Qwen 处理异常: {e}")
-        return "【官方摘要】\n解析服务暂不可用\n【专业解析】\n暂无\n【白话解析】\n暂无"
+        print(f"Qwen 异常: {e}")
+        return "【官方摘要】\n（解析服务异常）\n【专业解析】\n暂无\n【白话解析】\n暂无"
 
-# 构建内容（使用普通字符串拼接 + format，避免 f-string 转义问题）
+# ────────────────────────────────────────────────
+# HTML 构建 —— 高级电子报风格
+# ────────────────────────────────────────────────
 today = datetime.now().strftime('%Y年%m月%d日')
 
-msg = """
-<div style="font-family: 'SimSun', serif; max-width: 100%; margin: 0 auto; padding: 15px; border: 1px solid #ddd; background-color: #f9f9f9; border-radius: 8px;">
-    <h1 style="text-align: center; color: #333; margin-bottom: 5px; font-size: 24px; border-bottom: 2px solid #ccc; padding-bottom: 10px;">每日新闻早报</h1>
-    <p style="text-align: center; color: #666; font-size: 14px; margin: 0;">日期：{}　来源：全球主流媒体聚合</p>
-    <hr style="border: 0; border-top: 1px dashed #ccc; margin: 15px 0;">
-""".format(today)
-
-current_category = ''
-for item in news_list:
-    parsed = qwen_process(item)
-
-    if item['category'] != current_category:
-        msg += """
-        <h2 style="color: #444; font-size: 20px; margin-top: 25px; border-left: 5px solid #007bff; padding-left: 10px;">{}</h2>
-        """.format(item['category'])
-        current_category = item['category']
-
-    img_tag = ''
-    if item['img_url']:
-        img_tag = '<img src="{}" alt="配图" style="max-width:100%; height:auto; display:block; margin:0 auto 10px; border-radius:4px;">'.format(item['img_url'])
-
-    # 解析文本拆分
-    parts = parsed.split('【专业解析】')
-    official = parts[0].replace('【官方摘要】\n', '').strip() if len(parts) > 0 else '无摘要'
-    
-    if len(parts) > 1:
-        prof_and_white = parts[1].split('【白话解析】')
-        professional = prof_and_white[0].strip() if len(prof_and_white) > 0 else '无专业解析'
-        vernacular = prof_and_white[1].strip() if len(prof_and_white) > 1 else '无白话解析'
-    else:
-        professional = '无专业解析'
-        vernacular = '无白话解析'
-
-    msg += """
-    <div style="margin-bottom: 20px; padding: 10px; background-color: #fff; border: 1px solid #eee; border-radius: 5px; box-shadow: 0 2px 4px rgba(0,0,0,0.05);">
-        <h3 style="color: #222; font-size: 18px; margin: 0 0 10px 0;">{}</h3>
-        {}
-        <p style="font-size: 14px; line-height: 1.6; color: #555; margin: 5px 0;"><strong>官方摘要：</strong><br>{}</p>
-        <p style="font-size: 14px; line-height: 1.6; color: #555; margin: 5px 0;"><strong>专业解析：</strong><br>{}</p>
-        <p style="font-size: 14px; line-height: 1.6; color: #555; margin: 5px 0;"><strong>白话解析：</strong><br>{}</p>
-        <p style="text-align: right; margin-top: 10px;"><a href="{}" style="color: #007bff; text-decoration: none; font-size: 13px;">阅读原文 →</a></p>
+msg = f"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>每日新闻早报 {today}</title>
+<style>
+    body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif; background:#f8f9fa; color:#1a1a1a; line-height:1.65; margin:0; padding:20px 12px; }}
+    .container {{ max-width:680px; margin:0 auto; background:white; border-radius:12px; overflow:hidden; box-shadow:0 10px 30px rgba(0,0,0,0.08); }}
+    .header {{ background:linear-gradient(135deg, #1e3a8a, #3b82f6); color:white; padding:32px 24px 20px; text-align:center; }}
+    .header h1 {{ margin:0; font-size:28px; font-weight:700; letter-spacing:0.5px; }}
+    .header .date {{ margin:8px 0 0; font-size:15px; opacity:0.9; }}
+    .content {{ padding:24px; }}
+    h2 {{ color:#111827; font-size:22px; font-weight:700; margin:36px 0 16px; padding-left:12px; border-left:5px solid #3b82f6; }}
+    .card {{ background:#ffffff; border:1px solid #e5e7eb; border-radius:10px; margin-bottom:24px; overflow:hidden; box-shadow:0 4px 12px rgba(0,0,0,0.04); transition:box-shadow 0.2s; }}
+    .card:hover {{ box-shadow:0 8px 20px rgba(0,0,0,0.08); }}
+    .card img {{ width:100%; height:180px; object-fit:cover; display:block; }}
+    .card-body {{ padding:20px 22px; }}
+    .title {{ font-size:19px; font-weight:700; color:#111827; margin:0 0 14px; line-height:1.4; }}
+    .section {{ font-size:15px; color:#4b5563; margin:14px 0; }}
+    .section strong {{ color:#1e40af; }}
+    .link {{ display:block; text-align:right; margin-top:12px; font-size:14px; }}
+    .link a {{ color:#2563eb; text-decoration:none; font-weight:500; }}
+    .link a:hover {{ text-decoration:underline; }}
+    .footer {{ background:#f1f5f9; padding:20px; text-align:center; font-size:13px; color:#6b7280; border-top:1px solid #e5e7eb; }}
+</style>
+</head>
+<body>
+<div class="container">
+    <div class="header">
+        <h1>每日新闻早报</h1>
+        <div class="date">{today}　全球主流媒体精选</div>
     </div>
-    """.format(
-        item['title'],
-        img_tag,
-        official,
-        professional,
-        vernacular,
-        item['link']
-    )
-
-msg += """
-    <hr style="border: 0; border-top: 1px dashed #ccc; margin: 15px 0;">
-    <p style="text-align: center; font-size: 12px; color: #888; margin: 0;">来源：NewsData.io（Reuters、BBC、CNN、澎湃、财新、新华社等）</p>
-    <p style="text-align: center; font-size: 12px; color: #888; margin: 0;">推送时间：每日北京时间早8:30　欢迎反馈意见</p>
-</div>
+    <div class="content">
 """
 
-# PushPlus 发送
+current_cat = None
+for item in news_list:
+    if item['category'] != current_cat:
+        msg += f'<h2>{item["category"]}</h2>'
+        current_cat = item['category']
+
+    parsed = qwen_process(item)
+
+    # 更健壮的拆分（防止格式错乱）
+    parts = parsed.replace('\n\n', '\n').split('【')
+    official = professional = vernacular = "（解析异常）"
+
+    for p in parts:
+        p = p.strip()
+        if p.startswith('官方摘要】'):
+            official = p.replace('官方摘要】', '').strip()[:180]
+        elif p.startswith('专业解析】'):
+            professional = p.replace('专业解析】', '').strip()[:160]
+        elif p.startswith('白话解析】'):
+            vernacular = p.replace('白话解析】', '').strip()[:140]
+
+    img_tag = f'<img src="{item["img_url"]}" alt="新闻配图">' if item['img_url'] else ''
+
+    msg += f"""
+        <div class="card">
+            {img_tag}
+            <div class="card-body">
+                <div class="title">{item['title']}</div>
+                <div class="section"><strong>官方摘要</strong><br>{official}</div>
+                <div class="section"><strong>专业解析</strong><br>{professional}</div>
+                <div class="section"><strong>白话解读</strong><br>{vernacular}</div>
+                <div class="link"><a href="{item['link']}" target="_blank">阅读原文 →</a></div>
+            </div>
+        </div>
+    """
+
+msg += """
+    </div>
+    <div class="footer">
+        <p>来源：NewsData.io 聚合（Reuters / BBC / 新华社 / 财新 / 澎湃等）</p>
+        <p>每日北京时间早8:30推送　欢迎反馈</p>
+    </div>
+</div>
+</body>
+</html>
+"""
+
+# ────────────────────────────────────────────────
+# 推送到 PushPlus
+# ────────────────────────────────────────────────
 push_url = "https://www.pushplus.plus/send"
 payload = {
     "token": PUSHPLUS_TOKEN,
-    "title": "每日新闻早报 " + today,
+    "title": f"每日新闻早报 {today}",
     "content": msg,
     "template": "html"
 }
@@ -208,29 +242,24 @@ payload = {
 success = False
 for attempt in range(1, 4):
     try:
-        response = requests.post(push_url, json=payload, timeout=22)
-        print("推送尝试 {} | 状态码: {}".format(attempt, response.status_code))
-        print("返回: {}...".format(response.text[:280]))
-
-        if response.status_code == 200:
-            try:
-                resp_json = response.json()
-                if resp_json.get("code") == 200:
-                    print("推送成功")
-                    success = True
-                    break
-            except:
-                if "请求成功" in response.text or "200" in response.text:
-                    print("推送可能成功（非标准响应）")
-                    success = True
-                    break
+        r = requests.post(push_url, json=payload, timeout=20)
+        print(f"推送尝试 {attempt} | 状态码: {r.status_code}")
+        print("返回:", r.text[:300])
+        if r.status_code == 200:
+            j = r.json()
+            if j.get("code") in (200, 0) or "成功" in r.text:
+                print("推送成功")
+                success = True
+                break
     except Exception as e:
-        print("推送异常 {}: {}".format(attempt, str(e)))
-
+        print(f"推送异常 {attempt}: {e}")
     if attempt < 3:
-        time.sleep(12)
+        time.sleep(10)
 
 if not success:
-    print("推送未确认成功，但脚本已完成")
+    print("推送未确认成功（但脚本已完成）")
+    # 可选：把 msg 存本地看实际字节数
+    with open("last_news.html", "w", encoding="utf-8") as f:
+        f.write(msg)
 
-print("执行结束　新闻总数：{}".format(len(news_list)))
+print(f"执行结束　新闻总数：{len(news_list)}")
