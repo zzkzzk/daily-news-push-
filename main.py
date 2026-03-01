@@ -6,7 +6,7 @@ from datetime import datetime
 
 # 从环境变量获取密钥
 NEWSDATA_API_KEY = os.getenv('NEWSDATA_API_KEY')
-QWEN_API_KEY = os.getenv('QWEN_API_KEY')
+ZHIPU_API_KEY = os.getenv('ZHIPU_API_KEY')          # 智谱AI API Key
 PUSHPLUS_TOKEN = os.getenv('PUSHPLUS_TOKEN')
 
 categories = [
@@ -106,49 +106,65 @@ if len(news_list) < 14:
 
 print(f"收集到新闻：{len(news_list)} 条")
 
-# 通义千问处理 ── 强制简体中文（除官方摘要外）
-def qwen_process(item):
+# 智谱AI 处理 ── 强制简体中文输出
+def glm_process(item):
     text = f"语言：{item['lang']} 分类：{item['category']} 标题：{item['title']} 摘要：{item['desc'][:200]}"
 
-    url = "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation"
+    url = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+    
     headers = {
-        "Authorization": f"Bearer {QWEN_API_KEY}",
+        "Authorization": f"Bearer {ZHIPU_API_KEY}",
         "Content-Type": "application/json"
     }
+    
     body = {
-        "model": "qwen-turbo",
-        "input": {
-            "messages": [
-                {
-                    "role": "system",
-                    "content": (
-                        "你是一位资深中文报纸副总编辑。处理新闻时**必须**使用**简体中文**输出，除【官方摘要】可能保留原文轻微繁体/英文专有名词外，【专业解析】和【白话解析】两段**强制全部使用简体中文**，即使原文是繁体或英文。\n\n"
-                        "输出严格格式，不得多余文字、空格、符号：\n\n"
-                        "【官方摘要】\n不超过160字的精炼中文摘要（若非中文则翻译后浓缩）\n\n"
-                        "【专业解析】\n客观中性、社论风格，110–130字，2段，必须简体中文\n\n"
-                        "【白话解析】\n通俗接地气，像聊天解释，90–110字，2段，必须简体中文\n\n"
-                        "禁止markdown、列表、感叹号滥用、口语化标题。"
-                    )
-                },
-                {"role": "user", "content": f"处理这条新闻：{text}"}
-            ]
-        },
-        "parameters": {
-            "max_tokens": 420,
-            "temperature": 0.65,
-            "top_p": 0.92
-        }
+        "model": "glm-4.7-flash",  # 可改为 "glm-5"、"glm-4.7"、"glm-4.6" 等
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "你是一位资深中文报纸副总编辑。处理新闻时**必须**使用**简体中文**输出，除【官方摘要】可能保留原文轻微繁体/英文专有名词外，"
+                    "【专业解析】和【白话解析】两段**强制全部使用简体中文**，即使原文是繁体或英文。\n\n"
+                    "输出严格格式，不得多余文字、空格、符号、开头结尾说明：\n\n"
+                    "【官方摘要】\n不超过160字的精炼中文摘要（若非中文则翻译后浓缩）\n\n"
+                    "【专业解析】\n客观中性、社论风格，110–130字，2段，必须简体中文\n\n"
+                    "【白话解析】\n通俗接地气，像聊天解释，90–110字，2段，必须简体中文\n\n"
+                    "禁止使用markdown、列表、过多感叹号、口语化标题、任何非指定格式内容。"
+                )
+            },
+            {
+                "role": "user",
+                "content": f"处理这条新闻：{text}"
+            }
+        ],
+        "temperature": 0.65,
+        "top_p": 0.92,
+        "max_tokens": 420,
+        "stream": False
     }
+    
     try:
         r = requests.post(url, headers=headers, json=body, timeout=25)
+        r.raise_for_status()
         result = r.json()
-        output = result.get("output", {}).get("text", "").strip()
-        return output if output else "解析失败"
+        
+        # 智谱返回格式兼容 OpenAI
+        content = result.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+        
+        if not content:
+            return "【官方摘要】\n（内容为空）\n【专业解析】\n暂无\n【白话解析】\n暂无"
+            
+        return content
+    
+    except requests.exceptions.RequestException as e:
+        print(f"智谱API请求异常: {e} | 状态码: {getattr(r, 'status_code', '未知')}")
+        return "【官方摘要】\n（智谱服务异常）\n【专业解析】\n暂无\n【白话解析】\n暂无"
     except Exception as e:
-        print(f"Qwen 异常: {e}")
-        return "【官方摘要】\n（解析服务异常）\n【专业解析】\n暂无\n【白话解析】\n暂无"
+        print(f"智谱处理异常: {e}")
+        return "【官方摘要】\n（解析异常）\n【专业解析】\n暂无\n【白话解析】\n暂无"
 
-# HTML 构建 ── 手机端宽度优化 + 高级感
+
+# HTML 构建
 today = datetime.now().strftime('%Y年%m月%d日')
 
 msg = f"""<!DOCTYPE html>
@@ -177,7 +193,6 @@ msg = f"""<!DOCTYPE html>
     .link a:hover {{ text-decoration:underline; }}
     .footer {{ background:#f1f5f9; padding:20px; text-align:center; font-size:13px; color:#6b7280; border-top:1px solid #e5e7eb; }}
     
-    /* 手机端优化：撑满宽度 + 更舒适间距 */
     @media (max-width: 768px) {{
         body {{ padding:8px 4px; }}
         .container {{ max-width:100%; border-radius:0; box-shadow:none; }}
@@ -186,7 +201,7 @@ msg = f"""<!DOCTYPE html>
         .content {{ padding:18px 16px; }}
         h2 {{ font-size:21px; margin:28px 0 16px; }}
         .card {{ margin-bottom:24px; border-radius:10px; }}
-        .card-body {{ padding:22px 24px; }}  /* 左右padding加大，撑满感更强 */
+        .card-body {{ padding:22px 24px; }}
         .title {{ font-size:19px; }}
         .section {{ font-size:15px; margin:14px 0; }}
         .link {{ font-size:13.8px; }}
@@ -213,7 +228,7 @@ for item in news_list:
         msg += f'<h2>{item["category"]}</h2>'
         current_cat = item['category']
 
-    parsed = qwen_process(item)
+    parsed = glm_process(item)
 
     parts = parsed.replace('\n\n', '\n').split('【')
     official = professional = vernacular = "（解析异常）"
