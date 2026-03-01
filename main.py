@@ -3,12 +3,12 @@ import os
 import json
 import time
 
-# 从 GitHub Secrets 获取
+# 从 GitHub Secrets 获取密钥
 NEWSDATA_API_KEY = os.getenv('NEWSDATA_API_KEY')
 QWEN_API_KEY = os.getenv('QWEN_API_KEY')
 PUSHPLUS_TOKEN = os.getenv('PUSHPLUS_TOKEN')
 
-# 要抓的新闻类别
+# 新闻类别
 categories = ['politics', 'business', 'technology', 'sports', 'entertainment']
 
 news_list = []
@@ -18,7 +18,7 @@ for cat in categories:
     params = {
         'apikey': NEWSDATA_API_KEY,
         'category': cat,
-        'language': 'zh',
+        'language': 'zh',          # 优先中文
         'size': 1,
         'removeduplicate': '1'
     }
@@ -34,10 +34,12 @@ for cat in categories:
                 'desc': (art.get('description') or art.get('content', '无内容'))[:300],
                 'link': art.get('link', '无链接')
             })
+        else:
+            print(f"抓取 {cat} 失败: {data.get('message', '未知错误')}")
     except Exception as e:
-        print(f"抓取 {cat} 新闻失败: {e}")
+        print(f"抓取 {cat} 异常: {e}")
 
-# fallback 如果中文少
+# 如果中文新闻少，fallback 加关键词
 if len(news_list) < 3:
     for cat in categories:
         params.pop('language', None)
@@ -54,9 +56,9 @@ if len(news_list) < 3:
                     'link': art.get('link', '无链接')
                 })
         except Exception as e:
-            print(f"fallback {cat} 失败: {e}")
+            print(f"fallback {cat} 异常: {e}")
 
-# 通义千问 大白话解析
+# 通义千问 大白话解析函数
 def qwen_parse(text):
     qwen_url = "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation"
     headers = {
@@ -76,41 +78,59 @@ def qwen_parse(text):
     try:
         r = requests.post(qwen_url, headers=headers, json=body, timeout=20)
         result = r.json()
-        return result.get("output", {}).get("text", "解析失败").strip()
+        parsed = result.get("output", {}).get("text", "解析失败").strip()
+        return parsed
     except Exception as e:
-        print(f"Qwen 解析失败: {e}")
+        print(f"Qwen 解析异常: {e}")
         return "解析出错了"
 
-# 拼消息
+# 构建消息内容
 msg = "今日新闻简报（政治/财经/科技/体育/文化）\n\n"
 for i, item in enumerate(news_list, 1):
     official = f"{i}. {item['title']}\n摘要：{item['desc']}\n链接：{item['link']}\n"
     parse_text = qwen_parse(item['title'] + " " + item['desc'])
-    msg += official + f"大白话：{parse_text}\n\n{'-'*40}\n"
+    msg += official + f"大白话：{parse_text}\n\n{'-'*50}\n\n"
 
 if not news_list:
-    msg += "今天没抓到新闻（可能API额度或网络问题），明天再来看～"
+    msg += "今天没抓到新闻（可能API额度用完或网络问题），明天再来看～"
 
-# PushPlus 推送 - 加强版：https + 重试 + 超时 + 日志
-push_url = f"https://www.pushplus.plus/send?token={PUSHPLUS_TOKEN}&title=每日新闻&content={msg}&template=html"
+# PushPlus 推送 - 使用 POST 方法，避免 414 URI Too Large
+push_url = "https://www.pushplus.plus/send"
+
+payload = {
+    "token": PUSHPLUS_TOKEN,
+    "title": "每日新闻推送",
+    "content": msg,
+    "template": "html"  # 或改成 "txt" 如果不想 html 格式
+}
 
 success = False
 for attempt in range(1, 4):
     try:
-        response = requests.get(push_url, timeout=20)
-        print(f"PushPlus 尝试 {attempt}: 状态码 {response.status_code}")
-        print(f"PushPlus 返回: {response.text[:200]}...")  # 打印前200字符看结果
+        response = requests.post(push_url, json=payload, timeout=20)
+        print(f"PushPlus POST 尝试 {attempt}: 状态码 {response.status_code}")
+        print(f"PushPlus 返回内容: {response.text[:400]}...")  # 打印前400字符
+        
         if response.status_code == 200:
-            success = True
-            break
+            try:
+                resp_json = response.json()
+                if resp_json.get("code") == 200:
+                    print("推送成功！code=200")
+                    success = True
+                    break
+                else:
+                    print(f"业务错误: {resp_json.get('msg', '未知')}")
+            except:
+                print("响应不是 JSON，但状态码200，可能已接收")
+                success = True
+                break
     except Exception as e:
-        print(f"推送尝试 {attempt} 失败: {str(e)}")
+        print(f"POST 尝试 {attempt} 异常: {str(e)}")
     
     if attempt < 3:
-        time.sleep(10 * attempt)  # 指数退避：10s, 20s
+        time.sleep(10 * attempt)  # 10s, 20s 退避
 
 if not success:
-    print("推送最终失败，但脚本继续（不影响 workflow 成功）")
-    # 可以加 print(msg) 来日志看内容对不对
+    print("推送最终失败，但脚本继续执行（不影响 workflow）")
 
-print("执行完毕，新闻数：", len(news_list))
+print("脚本执行完毕，抓取新闻数量：", len(news_list))
