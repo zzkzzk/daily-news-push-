@@ -1,0 +1,27 @@
+name: 每日新闻推送
+
+on:
+  schedule:
+    - cron: '0 0 * * *'   # 北京时间早上8点（UTC 0点）
+  workflow_dispatch:      # 允许你手动点一下运行测试
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 设置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 安装 requests 库
+        run: pip install requests
+
+      - name: 运行脚本
+        env:
+          NEWSDATA_API_KEY: ${{ secrets.NEWSDATA_API_KEY }}
+          QWEN_API_KEY: ${{ secrets.QWEN_API_KEY }}
+          PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
+        run: python main.py
