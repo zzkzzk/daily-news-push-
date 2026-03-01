@@ -9,13 +9,16 @@ NEWSDATA_API_KEY = os.getenv('NEWSDATA_API_KEY')
 QWEN_API_KEY = os.getenv('QWEN_API_KEY')
 PUSHPLUS_TOKEN = os.getenv('PUSHPLUS_TOKEN')
 
-# 类别定义（中文名 + 英文参数 + 关键词，侧重中国+世界热门）
+# 扩展类别：增加更多大板块（如社会民生、健康医疗、环境气候），每个板块取2条新闻
 categories = [
     {'cn': '国际政治', 'en': 'politics', 'q': '中国 OR China OR world politics OR international relations'},
     {'cn': '财经经济', 'en': 'business', 'q': '中国经济 OR China economy OR global market OR finance'},
     {'cn': '科技', 'en': 'technology', 'q': '中国科技 OR AI China OR tech innovation OR science'},
     {'cn': '体育', 'en': 'sports', 'q': '中国体育 OR world sports OR Olympics OR football'},
-    {'cn': '文化娱乐', 'en': 'entertainment', 'q': '中国文化 OR global culture OR entertainment OR movie OR music'}
+    {'cn': '文化娱乐', 'en': 'entertainment', 'q': '中国文化 OR global culture OR entertainment OR movie OR music'},
+    {'cn': '社会民生', 'en': 'general', 'q': '中国社会 OR China society OR public welfare OR daily life'},  # 新增板块
+    {'cn': '健康医疗', 'en': 'health', 'q': '中国医疗 OR health China OR medicine OR pandemic'},  # 新增板块
+    {'cn': '环境气候', 'en': 'environment', 'q': '中国环境 OR climate change OR global warming OR ecology'}  # 新增板块
 ]
 
 news_list = []
@@ -25,7 +28,7 @@ for cat in categories:
     params = {
         'apikey': NEWSDATA_API_KEY,
         'language': 'zh',
-        'size': 1,
+        'size': 2,  # 每个板块取2条新闻
         'removeduplicate': '1'
     }
     if 'q' in cat:
@@ -36,38 +39,41 @@ for cat in categories:
         data = resp.json()
 
         if data.get('status') == 'success' and data.get('results'):
-            art = data['results'][0]
-            img_url = art.get('image_url') or ''
-            news_list.append({
-                'category': cat['cn'],
-                'title': art.get('title', '无标题').strip(),
-                'desc': (art.get('description') or art.get('content', '无内容'))[:300].strip(),
-                'link': art.get('link', ''),
-                'img_url': img_url,
-                'lang': art.get('language', 'unknown')
-            })
+            for art in data['results']:
+                img_url = art.get('image_url') or ''
+                # 打印 img_url 到日志，便于调试图片问题
+                print(f"图片URL for {art.get('title')}: {img_url}")
+                news_list.append({
+                    'category': cat['cn'],
+                    'title': art.get('title', '无标题').strip(),
+                    'desc': (art.get('description') or art.get('content', '无内容'))[:300].strip(),
+                    'link': art.get('link', ''),
+                    'img_url': img_url if img_url.startswith('https://') else '',  # 只用 https 避免加载问题
+                    'lang': art.get('language', 'unknown')
+                })
     except Exception as e:
         print(f"{cat['cn']} 抓取失败: {e}")
 
-# 如果新闻少于4条，用全球热门 + 中国相关补齐
-if len(news_list) < 4:
+# 如果新闻少于10条，用全球热门 + 中国相关补齐
+if len(news_list) < 10:
     params = {
         'apikey': NEWSDATA_API_KEY,
         'q': 'top world news today China OR global hot news',
-        'size': 3
+        'size': 5  # 多补一些
     }
     try:
         resp = requests.get("https://newsdata.io/api/1/latest", params=params, timeout=15)
         data = resp.json()
         if data.get('status') == 'success' and data.get('results'):
-            for art in data['results'][:3 - len(news_list)]:
+            for art in data['results'][:5 - len(news_list)]:
                 img_url = art.get('image_url') or ''
+                print(f"补齐图片URL: {img_url}")
                 news_list.append({
                     'category': '全球热点',
                     'title': art.get('title', '无标题').strip(),
                     'desc': (art.get('description') or art.get('content', '无内容'))[:300].strip(),
                     'link': art.get('link', ''),
-                    'img_url': img_url,
+                    'img_url': img_url if img_url.startswith('https://') else '',
                     'lang': art.get('language', 'unknown')
                 })
     except Exception as e:
@@ -109,7 +115,8 @@ for item in news_list:
     parsed = qwen_process(item)
     msg += f"## {item['category']} · {item['title']}\n\n"
     if item['img_url']:
-        msg += f"![新闻配图]({item['img_url']})\n\n"
+        # 改用 HTML img 标签嵌入（markdown 可能有问题，微信更兼容 HTML）
+        msg += f'<img src="{item['img_url']}" alt="新闻配图" width="100%" />\n\n'
     msg += f"**官方摘要**：{item['desc']}\n\n"
     msg += f"**专业解析**：\n{parsed}\n\n"
     if item['link']:
@@ -123,13 +130,13 @@ msg += "\n**来源**：NewsData.io 聚合（Reuters / BBC / CNN / SCMP / CGTN / 
 msg += "**推送时间**：每日北京时间早8点\n"
 msg += "小提示：点击图片或链接查看完整内容。欢迎反馈意见～"
 
-# PushPlus 发送（POST + markdown）
+# PushPlus 发送（POST + html 模板，避免 markdown 图片问题）
 push_url = "https://www.pushplus.plus/send"
 payload = {
     "token": PUSHPLUS_TOKEN,
     "title": "每日新闻早报 - 全球与中国热点",
     "content": msg,
-    "template": "markdown"
+    "template": "html"  # 改用 html 模板，确保图片显示
 }
 
 success = False
