@@ -29,7 +29,7 @@ for cat in categories:
         'apikey': NEWSDATA_API_KEY,
         'q': cat['q'],
         'language': 'zh',
-        'size': 3,               # 多取一些，筛选保留高质量的
+        'size': 3,
         'removeduplicate': '1'
     }
 
@@ -39,13 +39,12 @@ for cat in categories:
 
         if data.get('status') == 'success' and data.get('results'):
             valid_articles = []
-            for art in data['results'][:3]:  # 每个板块最多3条
+            for art in data['results'][:3]:
                 title = art.get('title', '').strip()
                 desc = (art.get('description') or art.get('content', '')).strip()[:320]
                 link = art.get('link', '')
                 img_url = art.get('image_url', '')
 
-                # 过滤低质量
                 if len(title) > 8 and len(desc) > 30 and 'http' in link:
                     valid_articles.append({
                         'category': cat['cn'],
@@ -56,7 +55,6 @@ for cat in categories:
                         'lang': art.get('language', 'zh')
                     })
 
-            # 确保至少2条
             if len(valid_articles) >= 2:
                 news_list.extend(valid_articles[:3])
             else:
@@ -78,7 +76,7 @@ if len(news_list) < 15:
         data = resp.json()
         if data.get('status') == 'success' and data.get('results'):
             for art in data['results']:
-                if len(news_list) >= 20:  # 上限
+                if len(news_list) >= 20:
                     break
                 title = art.get('title', '').strip()
                 desc = (art.get('description') or art.get('content', '')).strip()[:320]
@@ -98,7 +96,7 @@ if len(news_list) < 15:
     except Exception as e:
         print(f"全局补齐失败: {e}")
 
-# 通义千问处理函数（输出官方摘要、专业解析、白话解析）
+# 通义千问处理函数
 def qwen_process(item):
     text = f"语言：{item['lang']} 分类：{item['category']} 标题：{item['title']} 摘要：{item['desc']}"
     url = "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation"
@@ -137,36 +135,59 @@ def qwen_process(item):
         print(f"Qwen 处理异常: {e}")
         return "【官方摘要】\n解析服务暂不可用\n【专业解析】\n暂无\n【白话解析】\n暂无"
 
-# 构建内容（高级报纸排版：HTML + 内联CSS，标题醒目、正文清晰）
+# 构建内容（使用普通字符串拼接 + format，避免 f-string 转义问题）
 today = datetime.now().strftime('%Y年%m月%d日')
 
-msg = f"""
+msg = """
 <div style="font-family: 'SimSun', serif; max-width: 100%; margin: 0 auto; padding: 15px; border: 1px solid #ddd; background-color: #f9f9f9; border-radius: 8px;">
     <h1 style="text-align: center; color: #333; margin-bottom: 5px; font-size: 24px; border-bottom: 2px solid #ccc; padding-bottom: 10px;">每日新闻早报</h1>
-    <p style="text-align: center; color: #666; font-size: 14px; margin: 0;">日期：{today}　来源：全球主流媒体聚合</p>
+    <p style="text-align: center; color: #666; font-size: 14px; margin: 0;">日期：{}　来源：全球主流媒体聚合</p>
     <hr style="border: 0; border-top: 1px dashed #ccc; margin: 15px 0;">
-"""
+""".format(today)
 
 current_category = ''
 for item in news_list:
     parsed = qwen_process(item)
 
     if item['category'] != current_category:
-        msg += f"""
-        <h2 style="color: #444; font-size: 20px; margin-top: 25px; border-left: 5px solid #007bff; padding-left: 10px;">{item['category']}</h2>
-        """
+        msg += """
+        <h2 style="color: #444; font-size: 20px; margin-top: 25px; border-left: 5px solid #007bff; padding-left: 10px;">{}</h2>
+        """.format(item['category'])
         current_category = item['category']
 
-    msg += f"""
+    img_tag = ''
+    if item['img_url']:
+        img_tag = '<img src="{}" alt="配图" style="max-width:100%; height:auto; display:block; margin:0 auto 10px; border-radius:4px;">'.format(item['img_url'])
+
+    # 解析文本拆分
+    parts = parsed.split('【专业解析】')
+    official = parts[0].replace('【官方摘要】\n', '').strip() if len(parts) > 0 else '无摘要'
+    
+    if len(parts) > 1:
+        prof_and_white = parts[1].split('【白话解析】')
+        professional = prof_and_white[0].strip() if len(prof_and_white) > 0 else '无专业解析'
+        vernacular = prof_and_white[1].strip() if len(prof_and_white) > 1 else '无白话解析'
+    else:
+        professional = '无专业解析'
+        vernacular = '无白话解析'
+
+    msg += """
     <div style="margin-bottom: 20px; padding: 10px; background-color: #fff; border: 1px solid #eee; border-radius: 5px; box-shadow: 0 2px 4px rgba(0,0,0,0.05);">
-        <h3 style="color: #222; font-size: 18px; margin: 0 0 10px 0;">{item['title']}</h3>
-        {('<img src="' + item['img_url'] + '" alt="配图" style="max-width:100%; height:auto; display:block; margin:0 auto 10px; border-radius:4px;">' if item['img_url'] else '')}
-        <p style="font-size: 14px; line-height: 1.6; color: #555; margin: 5px 0;"><strong>官方摘要：</strong> {parsed.split('【专业解析】')[0].replace('【官方摘要】\n', '').strip()}</p>
-        <p style="font-size: 14px; line-height: 1.6; color: #555; margin: 5px 0;"><strong>专业解析：</strong> {parsed.split('【专业解析】\n')[1].split('【白话解析】')[0].strip()}</p>
-        <p style="font-size: 14px; line-height: 1.6; color: #555; margin: 5px 0;"><strong>白话解析：</strong> {parsed.split('【白话解析】\n')[1].strip()}</p>
-        <p style="text-align: right; margin-top: 10px;"><a href="{item['link']}" style="color: #007bff; text-decoration: none; font-size: 13px;">阅读原文 →</a></p>
+        <h3 style="color: #222; font-size: 18px; margin: 0 0 10px 0;">{}</h3>
+        {}
+        <p style="font-size: 14px; line-height: 1.6; color: #555; margin: 5px 0;"><strong>官方摘要：</strong><br>{}</p>
+        <p style="font-size: 14px; line-height: 1.6; color: #555; margin: 5px 0;"><strong>专业解析：</strong><br>{}</p>
+        <p style="font-size: 14px; line-height: 1.6; color: #555; margin: 5px 0;"><strong>白话解析：</strong><br>{}</p>
+        <p style="text-align: right; margin-top: 10px;"><a href="{}" style="color: #007bff; text-decoration: none; font-size: 13px;">阅读原文 →</a></p>
     </div>
-    """
+    """.format(
+        item['title'],
+        img_tag,
+        official,
+        professional,
+        vernacular,
+        item['link']
+    )
 
 msg += """
     <hr style="border: 0; border-top: 1px dashed #ccc; margin: 15px 0;">
@@ -179,7 +200,7 @@ msg += """
 push_url = "https://www.pushplus.plus/send"
 payload = {
     "token": PUSHPLUS_TOKEN,
-    "title": f"每日新闻早报 {today}",
+    "title": "每日新闻早报 " + today,
     "content": msg,
     "template": "html"
 }
@@ -188,8 +209,8 @@ success = False
 for attempt in range(1, 4):
     try:
         response = requests.post(push_url, json=payload, timeout=22)
-        print(f"推送尝试 {attempt} | 状态码: {response.status_code}")
-        print(f"返回: {response.text[:280]}...")
+        print("推送尝试 {} | 状态码: {}".format(attempt, response.status_code))
+        print("返回: {}...".format(response.text[:280]))
 
         if response.status_code == 200:
             try:
@@ -204,7 +225,7 @@ for attempt in range(1, 4):
                     success = True
                     break
     except Exception as e:
-        print(f"推送异常 {attempt}: {str(e)}")
+        print("推送异常 {}: {}".format(attempt, str(e)))
 
     if attempt < 3:
         time.sleep(12)
@@ -212,4 +233,4 @@ for attempt in range(1, 4):
 if not success:
     print("推送未确认成功，但脚本已完成")
 
-print(f"执行结束　新闻总数：{len(news_list)}")
+print("执行结束　新闻总数：{}".format(len(news_list)))
