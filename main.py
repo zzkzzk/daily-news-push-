@@ -3,23 +3,29 @@ import os
 import json
 import time
 
-# 从 GitHub Secrets 获取密钥
+# 从 GitHub Secrets 获取
 NEWSDATA_API_KEY = os.getenv('NEWSDATA_API_KEY')
 QWEN_API_KEY = os.getenv('QWEN_API_KEY')
 PUSHPLUS_TOKEN = os.getenv('PUSHPLUS_TOKEN')
 
-# 新闻类别
-categories = ['politics', 'business', 'technology', 'sports', 'entertainment']
+# 优化类别：对应中文常见分类
+categories = {
+    '政治': 'politics',
+    '财经': 'business',
+    '科技': 'technology',
+    '体育': 'sports',
+    '文化': 'entertainment'  # 娱乐+文化
+}
 
 news_list = []
 
-for cat in categories:
+for cn_name, en_name in categories.items():
     url = "https://newsdata.io/api/1/latest"
     params = {
         'apikey': NEWSDATA_API_KEY,
-        'category': cat,
-        'language': 'zh',          # 优先中文
-        'size': 1,
+        'category': en_name,
+        'language': 'zh',
+        'size': 1,  # 每类1条，控制长度
         'removeduplicate': '1'
     }
     
@@ -30,36 +36,44 @@ for cat in categories:
         if data.get('status') == 'success' and data.get('results'):
             art = data['results'][0]
             news_list.append({
-                'title': art.get('title', '无标题'),
-                'desc': (art.get('description') or art.get('content', '无内容'))[:300],
-                'link': art.get('link', '无链接')
+                'category': cn_name,
+                'title': art.get('title', '无标题').strip(),
+                'desc': (art.get('description') or art.get('content', '无内容'))[:250].strip(),
+                'link': art.get('link', '')
             })
         else:
-            print(f"抓取 {cat} 失败: {data.get('message', '未知错误')}")
+            print(f"{cn_name} 抓取失败")
     except Exception as e:
-        print(f"抓取 {cat} 异常: {e}")
+        print(f"{cn_name} 异常: {e}")
 
-# 如果中文新闻少，fallback 加关键词
-if len(news_list) < 3:
-    for cat in categories:
-        params.pop('language', None)
-        params['q'] = '中国 ' + cat
-        params['size'] = 1
+# fallback：如果某类空，用关键词补
+if len(news_list) < 4:
+    for cn_name, en_name in categories.items():
+        if any(item['category'] == cn_name for item in news_list):
+            continue
+        params = {
+            'apikey': NEWSDATA_API_KEY,
+            'q': f'中国 {cn_name}',
+            'language': 'zh',
+            'size': 1
+        }
         try:
-            resp = requests.get(url, params=params, timeout=15)
+            resp = requests.get("https://newsdata.io/api/1/latest", params=params, timeout=15)
             data = resp.json()
             if data.get('status') == 'success' and data.get('results'):
                 art = data['results'][0]
                 news_list.append({
-                    'title': art.get('title', '无标题'),
-                    'desc': (art.get('description') or art.get('content', '无内容'))[:300],
-                    'link': art.get('link', '无链接')
+                    'category': cn_name,
+                    'title': art.get('title', '无标题').strip(),
+                    'desc': (art.get('description') or art.get('content', '无内容'))[:250].strip(),
+                    'link': art.get('link', '')
                 })
-        except Exception as e:
-            print(f"fallback {cat} 异常: {e}")
+        except:
+            pass
 
-# 通义千问 大白话解析函数
-def qwen_parse(text):
+# 通义千问解析：升级提示，更像报纸编辑
+def qwen_parse(category, title, desc):
+    text = f"分类：{category} 标题：{title} 摘要：{desc}"
     qwen_url = "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation"
     headers = {
         "Authorization": f"Bearer {QWEN_API_KEY}",
@@ -69,11 +83,11 @@ def qwen_parse(text):
         "model": "qwen-turbo",
         "input": {
             "messages": [
-                {"role": "system", "content": "你是新闻大白话翻译机。用最接地气、简单易懂的口语化中文解释新闻。只输出解释内容，不要加任何前缀、标题、废话。限150字。"},
-                {"role": "user", "content": f"用大白话解释：{text}"}
+                {"role": "system", "content": "你是一位专业报纸编辑，用简体中文撰写大白话解析。风格：客观、中性、通俗易懂、专业感强，像《人民日报》或《南方周末》风格。只输出解析正文，不要标题、前缀、废话。限120-180字。用自然段落分段，便于阅读。"},
+                {"role": "user", "content": f"用大白话专业解析这条新闻：{text}"}
             ]
         },
-        "parameters": {"max_tokens": 280}
+        "parameters": {"max_tokens": 350}
     }
     try:
         r = requests.post(qwen_url, headers=headers, json=body, timeout=20)
@@ -81,56 +95,58 @@ def qwen_parse(text):
         parsed = result.get("output", {}).get("text", "解析失败").strip()
         return parsed
     except Exception as e:
-        print(f"Qwen 解析异常: {e}")
+        print(f"Qwen 异常: {e}")
         return "解析出错了"
 
-# 构建消息内容
-msg = "今日新闻简报（政治/财经/科技/体育/文化）\n\n"
-for i, item in enumerate(news_list, 1):
-    official = f"{i}. {item['title']}\n摘要：{item['desc']}\n链接：{item['link']}\n"
-    parse_text = qwen_parse(item['title'] + " " + item['desc'])
-    msg += official + f"大白话：{parse_text}\n\n{'-'*50}\n\n"
+# 构建 Markdown 格式消息（像报纸）
+msg = "# 每日新闻早报\n\n**日期**：今日精选 | **来源**：全球主流媒体聚合\n\n---\n\n"
+
+for item in news_list:
+    parse_text = qwen_parse(item['category'], item['title'], item['desc'])
+    msg += f"## {item['category']} | {item['title']}\n\n"
+    msg += f"**官方摘要**：{item['desc']}\n\n"
+    msg += f"**大白话解析**：\n{parse_text}\n\n"
+    if item['link']:
+        msg += f"[阅读原文]({item['link']})\n\n"
+    msg += "---\n\n"
 
 if not news_list:
-    msg += "今天没抓到新闻（可能API额度用完或网络问题），明天再来看～"
+    msg += "**今日暂无精选新闻**，可能是网络或额度问题，明天见！\n"
 
-# PushPlus 推送 - 使用 POST 方法，避免 414 URI Too Large
+msg += "\n\n**小提示**：点链接查看详情。欢迎反馈意见～"
+
+# PushPlus POST 推送（用 markdown 模板）
 push_url = "https://www.pushplus.plus/send"
 
 payload = {
     "token": PUSHPLUS_TOKEN,
-    "title": "每日新闻推送",
+    "title": "每日新闻早报",
     "content": msg,
-    "template": "html"  # 或改成 "txt" 如果不想 html 格式
+    "template": "markdown"  # 关键：markdown 模板，微信渲染超美观
 }
 
 success = False
 for attempt in range(1, 4):
     try:
         response = requests.post(push_url, json=payload, timeout=20)
-        print(f"PushPlus POST 尝试 {attempt}: 状态码 {response.status_code}")
-        print(f"PushPlus 返回内容: {response.text[:400]}...")  # 打印前400字符
+        print(f"POST 尝试 {attempt}: 状态 {response.status_code}")
+        print(f"返回: {response.text[:300]}...")
         
         if response.status_code == 200:
-            try:
-                resp_json = response.json()
-                if resp_json.get("code") == 200:
-                    print("推送成功！code=200")
-                    success = True
-                    break
-                else:
-                    print(f"业务错误: {resp_json.get('msg', '未知')}")
-            except:
-                print("响应不是 JSON，但状态码200，可能已接收")
+            resp_json = response.json()
+            if resp_json.get("code") == 200:
+                print("推送成功！")
                 success = True
                 break
+            else:
+                print(f"错误: {resp_json.get('msg')}")
     except Exception as e:
-        print(f"POST 尝试 {attempt} 异常: {str(e)}")
+        print(f"异常 {attempt}: {e}")
     
     if attempt < 3:
-        time.sleep(10 * attempt)  # 10s, 20s 退避
+        time.sleep(8 * attempt)
 
 if not success:
-    print("推送最终失败，但脚本继续执行（不影响 workflow）")
+    print("推送失败，但脚本继续")
 
-print("脚本执行完毕，抓取新闻数量：", len(news_list))
+print("执行完，新闻数：", len(news_list))
