@@ -29,7 +29,7 @@ for cat in categories:
         'apikey': NEWSDATA_API_KEY,
         'q': cat['q'],
         'language': 'zh',
-        'size': 3,               # 多取一些，后面筛选保留高质量的
+        'size': 3,               # 多取一些，筛选保留高质量的
         'removeduplicate': '1'
     }
 
@@ -39,13 +39,13 @@ for cat in categories:
 
         if data.get('status') == 'success' and data.get('results'):
             valid_articles = []
-            for art in data['results'][:3]:  # 每个板块最多保留3条，实际筛选后至少2条
+            for art in data['results'][:3]:  # 每个板块最多3条
                 title = art.get('title', '').strip()
                 desc = (art.get('description') or art.get('content', '')).strip()[:320]
                 link = art.get('link', '')
                 img_url = art.get('image_url', '')
 
-                # 过滤掉标题或内容太短/垃圾的
+                # 过滤低质量
                 if len(title) > 8 and len(desc) > 30 and 'http' in link:
                     valid_articles.append({
                         'category': cat['cn'],
@@ -56,7 +56,7 @@ for cat in categories:
                         'lang': art.get('language', 'zh')
                     })
 
-            # 确保每个板块至少2条（如果不够，从 fallback 补）
+            # 确保至少2条
             if len(valid_articles) >= 2:
                 news_list.extend(valid_articles[:3])
             else:
@@ -78,7 +78,7 @@ if len(news_list) < 15:
         data = resp.json()
         if data.get('status') == 'success' and data.get('results'):
             for art in data['results']:
-                if len(news_list) >= 18:  # 上限控制，避免太长
+                if len(news_list) >= 20:  # 上限
                     break
                 title = art.get('title', '').strip()
                 desc = (art.get('description') or art.get('content', '')).strip()[:320]
@@ -86,7 +86,6 @@ if len(news_list) < 15:
                 img_url = art.get('image_url', '')
 
                 if len(title) > 8 and len(desc) > 30 and 'http' in link:
-                    # 避免重复
                     if not any(n['link'] == link for n in news_list):
                         news_list.append({
                             'category': '综合要闻',
@@ -99,7 +98,7 @@ if len(news_list) < 15:
     except Exception as e:
         print(f"全局补齐失败: {e}")
 
-# 通义千问处理函数
+# 通义千问处理函数（输出官方摘要、专业解析、白话解析）
 def qwen_process(item):
     text = f"语言：{item['lang']} 分类：{item['category']} 标题：{item['title']} 摘要：{item['desc']}"
     url = "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation"
@@ -115,18 +114,19 @@ def qwen_process(item):
                     "role": "system",
                     "content": (
                         "你是一位资深中文报纸编辑。用简体中文处理新闻：\n"
-                        "1. 如果原文非中文，先给出简洁的中文翻译摘要（标题+核心内容）。\n"
-                        "2. 然后撰写专业大白话解析，风格客观、平实、通俗，像高质量报纸社评或深度报道。\n"
-                        "   语言自然流畅，避免口语化俚语和多余感叹号，分 2–4 段，字数 140–220 字。\n"
-                        "只输出以下格式，不要任何前缀、说明或多余符号：\n"
-                        "【翻译摘要】（如果需要）\n"
-                        "【专业解析】\n正文内容"
+                        "1. 如果原文非中文，先给出简洁的中文翻译作为官方摘要（标题+核心内容）。否则，直接用原文摘要作为官方摘要。\n"
+                        "2. 撰写专业解析（专家视角）：客观、中性、深入分析背景、影响，风格如社论，字数120-180字，分2-3段。\n"
+                        "3. 撰写白话解析（普通人视角）：通俗易懂、接地气、像聊天解释，字数100-150字，分2-3段。\n"
+                        "只输出以下严格格式，无任何前缀、多余符号或说明：\n"
+                        "【官方摘要】\n正文\n"
+                        "【专业解析】\n正文\n"
+                        "【白话解析】\n正文"
                     )
                 },
                 {"role": "user", "content": f"处理这条新闻：{text}"}
             ]
         },
-        "parameters": {"max_tokens": 480, "temperature": 0.65}
+        "parameters": {"max_tokens": 650, "temperature": 0.7}
     }
     try:
         r = requests.post(url, headers=headers, json=body, timeout=28)
@@ -135,41 +135,44 @@ def qwen_process(item):
         return output
     except Exception as e:
         print(f"Qwen 处理异常: {e}")
-        return "解析服务暂时不可用"
+        return "【官方摘要】\n解析服务暂不可用\n【专业解析】\n暂无\n【白话解析】\n暂无"
 
-# 构建内容（干净、专业报纸风格）
+# 构建内容（高级报纸排版：HTML + 内联CSS，标题醒目、正文清晰）
 today = datetime.now().strftime('%Y年%m月%d日')
 
-msg = f"""每日新闻早报
-日期：{today}　　来源：全球主流媒体聚合
-
-───────────────────────────────
-
+msg = f"""
+<div style="font-family: 'SimSun', serif; max-width: 100%; margin: 0 auto; padding: 15px; border: 1px solid #ddd; background-color: #f9f9f9; border-radius: 8px;">
+    <h1 style="text-align: center; color: #333; margin-bottom: 5px; font-size: 24px; border-bottom: 2px solid #ccc; padding-bottom: 10px;">每日新闻早报</h1>
+    <p style="text-align: center; color: #666; font-size: 14px; margin: 0;">日期：{today}　来源：全球主流媒体聚合</p>
+    <hr style="border: 0; border-top: 1px dashed #ccc; margin: 15px 0;">
 """
 
+current_category = ''
 for item in news_list:
     parsed = qwen_process(item)
 
-    msg += f"{item['category']}　　{item['title']}\n\n"
+    if item['category'] != current_category:
+        msg += f"""
+        <h2 style="color: #444; font-size: 20px; margin-top: 25px; border-left: 5px solid #007bff; padding-left: 10px;">{item['category']}</h2>
+        """
+        current_category = item['category']
 
-    if item['img_url']:
-        msg += f'<img src="{item["img_url"]}" alt="配图" style="max-width:100%; height:auto; display:block; margin:12px 0;">\n\n'
+    msg += f"""
+    <div style="margin-bottom: 20px; padding: 10px; background-color: #fff; border: 1px solid #eee; border-radius: 5px; box-shadow: 0 2px 4px rgba(0,0,0,0.05);">
+        <h3 style="color: #222; font-size: 18px; margin: 0 0 10px 0;">{item['title']}</h3>
+        {('<img src="' + item['img_url'] + '" alt="配图" style="max-width:100%; height:auto; display:block; margin:0 auto 10px; border-radius:4px;">' if item['img_url'] else '')}
+        <p style="font-size: 14px; line-height: 1.6; color: #555; margin: 5px 0;"><strong>官方摘要：</strong> {parsed.split('【专业解析】')[0].replace('【官方摘要】\n', '').strip()}</p>
+        <p style="font-size: 14px; line-height: 1.6; color: #555; margin: 5px 0;"><strong>专业解析：</strong> {parsed.split('【专业解析】\n')[1].split('【白话解析】')[0].strip()}</p>
+        <p style="font-size: 14px; line-height: 1.6; color: #555; margin: 5px 0;"><strong>白话解析：</strong> {parsed.split('【白话解析】\n')[1].strip()}</p>
+        <p style="text-align: right; margin-top: 10px;"><a href="{item['link']}" style="color: #007bff; text-decoration: none; font-size: 13px;">阅读原文 →</a></p>
+    </div>
+    """
 
-    msg += f"官方摘要：\n{item['desc']}\n\n"
-
-    msg += f"专业解析：\n{parsed}\n\n"
-
-    if item['link']:
-        msg += f'<a href="{item["link"]}">阅读原文</a>\n\n'
-
-    msg += "───────────────────────────────\n\n"
-
-if not news_list:
-    msg += "今日暂无可用新闻，可能受网络或API限制影响，请明日再查看。\n"
-
-msg += """───────────────────────────────
-来源：NewsData.io（Reuters、BBC、CNN、澎湃、财新、新华社等）
-每日北京时间早8:00推送　欢迎反馈意见
+msg += """
+    <hr style="border: 0; border-top: 1px dashed #ccc; margin: 15px 0;">
+    <p style="text-align: center; font-size: 12px; color: #888; margin: 0;">来源：NewsData.io（Reuters、BBC、CNN、澎湃、财新、新华社等）</p>
+    <p style="text-align: center; font-size: 12px; color: #888; margin: 0;">推送时间：每日北京时间早8:30　欢迎反馈意见</p>
+</div>
 """
 
 # PushPlus 发送
@@ -197,7 +200,7 @@ for attempt in range(1, 4):
                     break
             except:
                 if "请求成功" in response.text or "200" in response.text:
-                    print("推送可能成功（非标准JSON响应）")
+                    print("推送可能成功（非标准响应）")
                     success = True
                     break
     except Exception as e:
