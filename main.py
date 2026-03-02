@@ -1,6 +1,7 @@
 import requests
 import os
 import time
+import json
 from datetime import datetime
 
 # =============================
@@ -83,17 +84,14 @@ for cat in categories:
 
 print(f"收集到新闻：{len(news_list)} 条")
 
-# =============================
-# 智谱处理函数（带限速+指数退避）
-# =============================
-def zhipu_process(item):
+if not news_list:
+    print("没有获取到新闻，程序终止")
+    exit()
 
-    prompt_text = (
-        f"语言：{item['lang']} "
-        f"分类：{item['category']} "
-        f"标题：{item['title']} "
-        f"摘要：{item['desc'][:200]}"
-    )
+# =============================
+# 单次批量调用智谱（强制简体）
+# =============================
+def batch_zhipu(news_items):
 
     url = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
 
@@ -102,55 +100,54 @@ def zhipu_process(item):
         "Content-Type": "application/json"
     }
 
+    news_payload = []
+    for idx, item in enumerate(news_items):
+        news_payload.append({
+            "id": idx,
+            "category": item["category"],
+            "title": item["title"],
+            "desc": item["desc"]
+        })
+
+    system_prompt = """
+你是一位资深中文报纸副总编辑。
+
+我会给你一个JSON数组，每个元素是一条新闻。
+
+请为每条新闻生成三个字段：
+official  （≤160字摘要，可保留原有专有名词）
+professional（110-130字，两段，必须全部使用简体中文）
+vernacular（90-110字，两段，必须全部使用简体中文）
+
+除official外，其余部分必须严格使用简体中文，不允许出现繁体字。
+
+必须返回标准JSON数组，不允许解释，不允许markdown，不允许额外文字。
+"""
+
     body = {
         "model": "glm-4-flash",
         "messages": [
-            {
-                "role": "system",
-                "content": (
-                    "你是一位资深中文报纸副总编辑。必须使用简体中文输出。\n\n"
-                    "严格格式：\n"
-                    "【官方摘要】\n≤160字\n\n"
-                    "【专业解析】\n110-130字，两段\n\n"
-                    "【白话解析】\n90-110字，两段\n"
-                )
-            },
-            {
-                "role": "user",
-                "content": f"处理这条新闻：{prompt_text}"
-            }
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": json.dumps(news_payload, ensure_ascii=False)}
         ],
         "temperature": 0.6,
-        "max_tokens": 600
+        "max_tokens": 4000
     }
 
-    delay = 2
-    for attempt in range(5):
-        try:
-            response = requests.post(url, headers=headers, json=body, timeout=40)
+    response = requests.post(url, headers=headers, json=body, timeout=60)
+    response.raise_for_status()
 
-            if response.status_code == 429:
-                print(f"触发速率限制，等待 {delay} 秒...")
-                time.sleep(delay)
-                delay *= 2
-                continue
+    result = response.json()
+    content = result["choices"][0]["message"]["content"].strip()
 
-            response.raise_for_status()
-            result = response.json()
-            output = result["choices"][0]["message"]["content"].strip()
+    return json.loads(content)
 
-            time.sleep(2)  # 控制频率
-            return output
-
-        except Exception as e:
-            print(f"智谱异常: {e}")
-            time.sleep(delay)
-            delay *= 2
-
-    return "【官方摘要】\n解析失败\n【专业解析】\n暂无\n【白话解析】\n暂无"
+print("开始批量调用智谱…")
+analysis_list = batch_zhipu(news_list)
+print("智谱返回完成")
 
 # =============================
-# 构建 HTML（含图片）
+# HTML 构建（全宽手机优化）
 # =============================
 today = datetime.now().strftime('%Y年%m月%d日')
 
@@ -163,64 +160,65 @@ msg = f"""<!DOCTYPE html>
 <style>
 body {{
     font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto;
-    background:#f9fafb;
+    background:#f3f4f6;
     margin:0;
-    padding:12px 8px;
+    padding:8px 6px;   /* 仅保留轻微边距 */
 }}
 .container {{
-    max-width:920px;
+    width:100%;
+    max-width:100%;
     margin:0 auto;
     background:#fff;
-    border-radius:16px;
+    border-radius:12px;
     overflow:hidden;
-    box-shadow:0 10px 38px rgba(0,0,0,0.08);
 }}
 .header {{
     background:linear-gradient(135deg,#1d4ed8,#60a5fa);
     color:white;
-    padding:44px 24px 24px;
+    padding:36px 20px 20px;
     text-align:center;
 }}
 .content {{
-    padding:24px 20px;
+    padding:16px;
 }}
 h2 {{
-    font-size:22px;
-    margin:32px 0 16px;
-    border-left:5px solid #3b82f6;
-    padding-left:10px;
+    font-size:20px;
+    margin:26px 0 14px;
+    border-left:4px solid #3b82f6;
+    padding-left:8px;
 }}
 .card {{
     border:1px solid #e5e7eb;
-    border-radius:12px;
-    margin-bottom:28px;
+    border-radius:10px;
+    margin-bottom:20px;
     overflow:hidden;
 }}
 .card img {{
     width:100%;
-    max-height:220px;
-    object-fit:cover;
+    height:auto;
     display:block;
 }}
 .card-body {{
-    padding:22px;
+    padding:18px;
 }}
 .title {{
-    font-size:20px;
+    font-size:18px;
     font-weight:700;
-    margin-bottom:14px;
+    margin-bottom:12px;
 }}
 .section {{
-    font-size:15px;
-    margin:14px 0;
+    font-size:14.5px;
+    margin:12px 0;
+    line-height:1.7;
 }}
 .link {{
     text-align:right;
-    margin-top:12px;
+    margin-top:10px;
+    font-size:14px;
 }}
 .footer {{
     background:#f1f5f9;
-    padding:20px;
+    padding:16px;
     text-align:center;
     font-size:13px;
 }}
@@ -237,25 +235,11 @@ h2 {{
 
 current_cat = None
 
-for item in news_list:
+for item, analysis in zip(news_list, analysis_list):
 
     if item['category'] != current_cat:
         msg += f"<h2>{item['category']}</h2>"
         current_cat = item['category']
-
-    parsed = zhipu_process(item)
-
-    official = professional = vernacular = "解析异常"
-
-    parts = parsed.replace('\n\n', '\n').split('【')
-    for p in parts:
-        p = p.strip()
-        if p.startswith('官方摘要】'):
-            official = p.replace('官方摘要】', '').strip()
-        elif p.startswith('专业解析】'):
-            professional = p.replace('专业解析】', '').strip()
-        elif p.startswith('白话解析】'):
-            vernacular = p.replace('白话解析】', '').strip()
 
     img_tag = ""
     if item['img_url']:
@@ -266,9 +250,9 @@ for item in news_list:
         {img_tag}
         <div class="card-body">
             <div class="title">{item['title']}</div>
-            <div class="section"><strong>官方摘要：</strong><br>{official}</div>
-            <div class="section"><strong>专业解析：</strong><br>{professional}</div>
-            <div class="section"><strong>白话解读：</strong><br>{vernacular}</div>
+            <div class="section"><strong>官方摘要：</strong><br>{analysis['official']}</div>
+            <div class="section"><strong>专业解析：</strong><br>{analysis['professional']}</div>
+            <div class="section"><strong>白话解读：</strong><br>{analysis['vernacular']}</div>
             <div class="link"><a href="{item['link']}" target="_blank">阅读原文 →</a></div>
         </div>
     </div>
@@ -298,20 +282,8 @@ payload = {
     "template": "html"
 }
 
-success = False
-for attempt in range(3):
-    try:
-        r = requests.post(push_url, json=payload, timeout=20)
-        print(f"推送尝试 {attempt+1} | 状态: {r.status_code}")
-        print("返回:", r.text[:200])
-        if r.status_code == 200 and '"code":200' in r.text:
-            success = True
-            break
-    except Exception as e:
-        print("推送异常:", e)
-    time.sleep(8)
+r = requests.post(push_url, json=payload, timeout=30)
+print("推送状态:", r.status_code)
+print("返回:", r.text)
 
-if not success:
-    print("推送未确认成功")
-
-print(f"执行结束　新闻总数：{len(news_list)}")
+print("执行完成")
