@@ -2,87 +2,109 @@ import requests
 import os
 import json
 import re
+import time
 from datetime import datetime
 
-NEWSDATA_API_KEY = os.getenv('NEWSDATA_API_KEY')
-ZHIPU_API_KEY = os.getenv('ZHIPU_API_KEY')
-PUSHPLUS_TOKEN = os.getenv('PUSHPLUS_TOKEN')
+NEWSDATA_API_KEY = os.getenv("NEWSDATA_API_KEY")
+ZHIPU_API_KEY = os.getenv("ZHIPU_API_KEY")
+PUSHPLUS_TOKEN = os.getenv("PUSHPLUS_TOKEN")
+
+TARGET_PER_CATEGORY = 3
+MAX_TOTAL = 24
 
 categories = [
-    {'cn': '国际政治', 'q': 'China OR world politics OR geopolitics OR Taiwan OR Ukraine'},
-    {'cn': '财经经济', 'q': 'China economy OR finance OR trade OR market'},
-    {'cn': '科技前沿', 'q': 'China tech OR AI OR chip OR semiconductor OR Huawei'},
-    {'cn': '体育赛事', 'q': 'China sports OR Olympics OR football'},
-    {'cn': '文化娱乐', 'q': 'China entertainment OR movie OR celebrity'},
-    {'cn': '社会民生', 'q': 'China society OR education OR housing'},
-    {'cn': '健康医疗', 'q': 'China health OR vaccine OR hospital'},
-    {'cn': '环境气候', 'q': 'China climate OR carbon OR pollution'}
+    {"cn": "国际政治", "q": "China geopolitics OR Taiwan OR Ukraine OR world politics"},
+    {"cn": "财经经济", "q": "China economy OR market OR finance OR trade"},
+    {"cn": "科技前沿", "q": "China AI OR chip OR semiconductor OR Huawei"},
+    {"cn": "体育赛事", "q": "China sports OR Olympics OR football"},
+    {"cn": "文化娱乐", "q": "China movie OR celebrity OR entertainment"},
+    {"cn": "社会民生", "q": "China education OR housing OR society"},
+    {"cn": "健康医疗", "q": "China health OR hospital OR vaccine"},
+    {"cn": "环境气候", "q": "China climate OR carbon OR pollution"}
 ]
 
 news_list = []
 seen_links = set()
 
-# =============================
-# 获取新闻（稳定版）
-# =============================
+# ==============================
+# 强化新闻抓取（多轮补齐机制）
+# ==============================
 for cat in categories:
-    try:
-        resp = requests.get(
-            "https://newsdata.io/api/1/latest",
-            params={
-                'apikey': NEWSDATA_API_KEY,
-                'q': cat['q'],
-                'language': 'zh',
-                'size': 5,
-                'removeduplicate': '1'
-            },
-            timeout=20
-        )
 
-        data = resp.json()
+    collected = 0
+    page = 0
 
-        for art in data.get('results', [])[:2]:
+    while collected < TARGET_PER_CATEGORY and page < 3:
 
-            link = art.get('link') or ""
-            if not link or link in seen_links:
-                continue
-            seen_links.add(link)
+        try:
+            resp = requests.get(
+                "https://newsdata.io/api/1/latest",
+                params={
+                    "apikey": NEWSDATA_API_KEY,
+                    "q": cat["q"],
+                    "language": "zh",
+                    "size": 10,
+                    "page": page
+                },
+                timeout=25
+            )
 
-            title = (art.get('title') or "").strip()
-            desc = (art.get('description') or art.get('content') or "").strip()
+            data = resp.json()
 
-            img_url = art.get('image_url')
-            if not isinstance(img_url, str):
-                img_url = ""
-            if not img_url.startswith("http"):
-                img_url = ""
+            if data.get("status") != "success":
+                break
 
-            if len(title) < 8 or len(desc) < 40:
-                continue
+            for art in data.get("results", []):
 
-            news_list.append({
-                "category": cat["cn"],
-                "title": title,
-                "desc": desc,
-                "link": link,
-                "img_url": img_url
-            })
+                if collected >= TARGET_PER_CATEGORY:
+                    break
 
-    except Exception as e:
-        print("获取失败:", e)
+                link = art.get("link") or ""
+                if not link or link in seen_links:
+                    continue
+                seen_links.add(link)
+
+                title = (art.get("title") or "").strip()
+                desc = (art.get("description") or art.get("content") or "").strip()
+
+                if len(title) < 10 or len(desc) < 80:
+                    continue
+
+                img = art.get("image_url")
+                if not isinstance(img, str) or not img.startswith("http"):
+                    img = ""
+
+                news_list.append({
+                    "category": cat["cn"],
+                    "title": title,
+                    "desc": desc,
+                    "link": link,
+                    "img_url": img
+                })
+
+                collected += 1
+
+            page += 1
+
+        except Exception as e:
+            print("抓取异常:", e)
+            break
 
 print("收集到新闻：", len(news_list))
 
-if not news_list:
+if len(news_list) == 0:
+    print("没有获取到新闻")
     exit()
 
-# =============================
-# 智谱批量调用（超稳定清洗版）
-# =============================
+# 控制最大总数
+news_list = news_list[:MAX_TOTAL]
+
+# ==============================
+# 智谱单次批量调用（生产级容错）
+# ==============================
 def call_zhipu_batch(items):
 
     url = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
-
     headers = {
         "Authorization": f"Bearer {ZHIPU_API_KEY}",
         "Content-Type": "application/json"
@@ -97,12 +119,15 @@ def call_zhipu_batch(items):
         })
 
     system_prompt = """
-请为每条新闻生成：
+你是一位世界级新闻深度主编。
 
-official（≤220字）
-professional（不少于220字，两段，简体中文）
-vernacular（不少于180字，两段，简体中文）
+为每条新闻生成：
 
+official（150-220字）
+professional（不少于250字，两段，简体中文）
+vernacular（不少于200字，两段，简体中文）
+
+必须全部简体中文。
 只返回JSON数组。
 """
 
@@ -113,48 +138,54 @@ vernacular（不少于180字，两段，简体中文）
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}
         ],
         "temperature": 0.7,
-        "max_tokens": 7000
+        "max_tokens": 8000
     }
 
-    r = requests.post(url, headers=headers, json=body, timeout=120)
-    r.raise_for_status()
+    for retry in range(3):
+        try:
+            r = requests.post(url, headers=headers, json=body, timeout=120)
+            r.raise_for_status()
 
-    content = r.json()["choices"][0]["message"]["content"]
+            content = r.json()["choices"][0]["message"]["content"]
+            content = re.sub(r"```json|```", "", content).strip()
 
-    # 去除 ```json 包裹
-    content = re.sub(r"```json|```", "", content).strip()
+            result = json.loads(content)
 
-    try:
-        result = json.loads(content)
-    except:
-        print("JSON解析失败，使用空结构")
-        result = []
+            safe = []
+            for i in range(len(items)):
+                if i < len(result) and isinstance(result[i], dict):
+                    safe.append({
+                        "official": result[i].get("official", "暂无摘要"),
+                        "professional": result[i].get("professional", "暂无专业解析"),
+                        "vernacular": result[i].get("vernacular", "暂无白话解读")
+                    })
+                else:
+                    safe.append({
+                        "official": "暂无摘要",
+                        "professional": "暂无专业解析",
+                        "vernacular": "暂无白话解读"
+                    })
 
-    # 强制字段补全
-    safe_list = []
-    for i in range(len(items)):
-        if i < len(result) and isinstance(result[i], dict):
-            safe_list.append({
-                "official": result[i].get("official", "暂无摘要"),
-                "professional": result[i].get("professional", "暂无专业解析"),
-                "vernacular": result[i].get("vernacular", "暂无白话解读")
-            })
-        else:
-            safe_list.append({
-                "official": "暂无摘要",
-                "professional": "暂无专业解析",
-                "vernacular": "暂无白话解读"
-            })
+            return safe
 
-    return safe_list
+        except Exception as e:
+            print("智谱异常重试:", retry + 1, e)
+            time.sleep(3)
+
+    # 彻底失败兜底
+    return [{
+        "official": "暂无摘要",
+        "professional": "暂无专业解析",
+        "vernacular": "暂无白话解读"
+    } for _ in items]
 
 
 analysis_list = call_zhipu_batch(news_list)
 
-# =============================
-# 高级排版
-# =============================
-today = datetime.now().strftime('%Y年%m月%d日')
+# ==============================
+# 产品级排版
+# ==============================
+today = datetime.now().strftime("%Y年%m月%d日")
 
 html = f"""
 <!DOCTYPE html>
@@ -166,38 +197,67 @@ html = f"""
 body {{
     margin:0;
     font-family:-apple-system,BlinkMacSystemFont;
-    background:#f5f7fa;
+    background:#f3f4f6;
+}}
+.header {{
+    background:#111827;
+    color:white;
+    padding:40px 20px;
+    text-align:center;
+}}
+.header h1 {{
+    margin:0;
+    font-size:30px;
 }}
 .container {{
-    max-width:100%;
     padding:20px;
-}}
-.title {{
-    font-size:28px;
-    font-weight:700;
-    margin-bottom:30px;
 }}
 .card {{
     background:white;
-    padding:20px;
-    margin-bottom:30px;
-    border-radius:12px;
-    box-shadow:0 5px 15px rgba(0,0,0,0.05);
+    padding:22px;
+    margin-bottom:28px;
+    border-radius:14px;
+    box-shadow:0 6px 20px rgba(0,0,0,0.06);
 }}
 .card img {{
     width:100%;
-    border-radius:8px;
+    border-radius:10px;
     margin-bottom:15px;
 }}
-.section-title {{
+.category {{
+    font-size:14px;
+    color:#2563eb;
+    font-weight:600;
+}}
+.title {{
+    font-size:20px;
     font-weight:700;
-    margin-top:15px;
+    margin:10px 0 15px;
+}}
+.section {{
+    margin-top:14px;
+    line-height:1.9;
+    font-size:15.5px;
+}}
+.label {{
+    font-weight:700;
+    margin-bottom:6px;
+    display:block;
+}}
+.footer {{
+    text-align:center;
+    padding:20px;
+    font-size:13px;
+    color:#666;
 }}
 </style>
 </head>
 <body>
+<div class="header">
+<h1>全球每日深度精选</h1>
+<p>{today}</p>
+</div>
 <div class="container">
-<div class="title">每日深度新闻 · {today}</div>
 """
 
 for item, analysis in zip(news_list, analysis_list):
@@ -206,34 +266,50 @@ for item, analysis in zip(news_list, analysis_list):
 
     html += f"""
     <div class="card">
+        <div class="category">{item["category"]}</div>
         {img_html}
-        <h3>{item['title']}</h3>
+        <div class="title">{item["title"]}</div>
 
-        <div class="section-title">官方摘要</div>
-        <p>{analysis['official']}</p>
+        <div class="section">
+            <span class="label">官方摘要</span>
+            {analysis["official"]}
+        </div>
 
-        <div class="section-title">专业解析</div>
-        <p>{analysis['professional']}</p>
+        <div class="section">
+            <span class="label">专业解析</span>
+            {analysis["professional"]}
+        </div>
 
-        <div class="section-title">白话解读</div>
-        <p>{analysis['vernacular']}</p>
+        <div class="section">
+            <span class="label">白话解读</span>
+            {analysis["vernacular"]}
+        </div>
 
-        <a href="{item['link']}">阅读原文</a>
+        <div class="section">
+            <a href="{item["link"]}">阅读原文</a>
+        </div>
     </div>
     """
 
-html += "</div></body></html>"
+html += """
+</div>
+<div class="footer">
+NewsData 数据来源 · 智谱AI深度生成
+</div>
+</body>
+</html>
+"""
 
-# =============================
-# PushPlus 推送（带重试）
-# =============================
+# ==============================
+# PushPlus 推送
+# ==============================
 for i in range(3):
     try:
         r = requests.post(
             "https://www.pushplus.plus/send",
             json={
                 "token": PUSHPLUS_TOKEN,
-                "title": f"每日新闻 {today}",
+                "title": f"每日深度新闻 {today}",
                 "content": html,
                 "template": "html"
             },
@@ -247,4 +323,7 @@ for i in range(3):
             break
 
     except Exception as e:
-        print(f"推送失败，重试 {i+1}/3 次...", e)
+        print("推送失败重试:", i + 1, e)
+        time.sleep(3)
+
+print("执行完成")
