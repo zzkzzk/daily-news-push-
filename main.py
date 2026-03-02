@@ -166,7 +166,7 @@ def batch_zhipu(items):
 2. professional：不少于200字专业深度解析，分2-3段，每段以中文自然段落形式书写，不要使用Python/JSON列表格式或多余标点。
 3. vernacular：不少于160字白话解读，分2段，文字读起来像风趣、有分寸的人在讲新闻，用老百姓能理解的语言讲解新闻内容，适当幽默或轻微调侃，但不直接呼喊读者，不使用“你看”“老铁”等口语化喊话，段落自然流畅，禁止列表符号、机械分析、书面化术语或AI套话。
 必须返回标准JSON数组，每个元素为字典，键名为"official"、"professional"、"vernacular"。
-禁止使用Markdown、禁止输出解释、禁止多余符号或英文。"""
+禁止Markdown、禁止输出解释、禁止多余符号或英文。"""
 
     body = {"model": "glm-4-flash",
             "messages": [{"role": "system", "content": system_prompt},
@@ -256,17 +256,31 @@ while len(valid_news) < 12 and idx < len(news_list):
     idx += 1
 
 # =============================
-# 图片可访问性检查函数
+# 图片处理：仅尝试 HTTPS 替换
 # =============================
-def check_image(url):
+def process_image(url):
+    if not url:
+        return ""
+    # 优先尝试 HTTPS
+    if url.startswith("http://"):
+        url_https = url.replace("http://", "https://", 1)
+        try:
+            r = requests.head(url_https, timeout=5)
+            if r.status_code == 200 and "image" in r.headers.get("Content-Type", ""):
+                return url_https
+        except:
+            pass
+    # 再尝试原始 URL
     try:
         r = requests.head(url, timeout=5)
-        content_type = r.headers.get('Content-Type', '')
-        if r.status_code == 200 and 'image' in content_type:
-            return True
+        if r.status_code == 200 and "image" in r.headers.get("Content-Type", ""):
+            return url
     except:
-        return False
-    return False
+        pass
+    return ""  # 不可访问就不显示
+
+for item in valid_news:
+    item["img_url"] = process_image(item.get("img_url", ""))
 
 # =============================
 # HTML 构建
@@ -298,9 +312,7 @@ body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
 """
 
 for item, analysis in zip(valid_news, valid_analysis):
-    img_html = ''
-    if item.get("img_url") and check_image(item["img_url"]):
-        img_html = f'<div class="img-container"><img src="{item["img_url"]}" alt="配图"></div>'
+    img_html = f'<div class="img-container"><img src="{item.get("img_url","")}" alt="配图"></div>' if item.get("img_url") else ''
     html += f"""
     <div class="news-item">
         {img_html}
