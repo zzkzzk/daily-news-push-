@@ -1,12 +1,8 @@
 import requests
 import os
-import time
 import json
 from datetime import datetime
 
-# =============================
-# 环境变量
-# =============================
 NEWSDATA_API_KEY = os.getenv('NEWSDATA_API_KEY')
 ZHIPU_API_KEY = os.getenv('ZHIPU_API_KEY')
 PUSHPLUS_TOKEN = os.getenv('PUSHPLUS_TOKEN')
@@ -45,12 +41,12 @@ for cat in categories:
         resp = requests.get(url, params=params, timeout=20)
         data = resp.json()
 
-        if data.get('status') != 'success' or not data.get('results'):
+        if data.get('status') != 'success':
             continue
 
-        valid_count = 0
-        for art in data['results']:
-            if valid_count >= 2:
+        valid = 0
+        for art in data.get('results', []):
+            if valid >= 2:
                 break
 
             link = art.get('link', '')
@@ -62,34 +58,29 @@ for cat in categories:
             desc = (art.get('description') or art.get('content') or '').strip()
             img_url = art.get('image_url', '')
 
-            if len(title) < 10 or len(desc) < 40 or 'http' not in link:
+            if len(title) < 10 or len(desc) < 40:
                 continue
-
-            if len(title) > 80:
-                title = title[:78] + '…'
 
             news_list.append({
                 'category': cat['cn'],
                 'title': title,
-                'desc': desc[:260],
+                'desc': desc,
                 'link': link,
-                'img_url': img_url if img_url.startswith('https') else '',
-                'lang': art.get('language', 'zh')
+                'img_url': img_url if img_url.startswith('https') else ''
             })
 
-            valid_count += 1
+            valid += 1
 
     except Exception as e:
-        print(f"[{cat['cn']}] 获取失败: {e}")
+        print(f"获取失败: {e}")
 
 print(f"收集到新闻：{len(news_list)} 条")
 
 if not news_list:
-    print("没有获取到新闻，程序终止")
     exit()
 
 # =============================
-# 单次批量调用智谱（强制简体）
+# 单次批量调用智谱（深度内容版）
 # =============================
 def batch_zhipu(news_items):
 
@@ -100,160 +91,180 @@ def batch_zhipu(news_items):
         "Content-Type": "application/json"
     }
 
-    news_payload = []
-    for idx, item in enumerate(news_items):
-        news_payload.append({
-            "id": idx,
+    payload = []
+    for i, item in enumerate(news_items):
+        payload.append({
+            "id": i,
             "category": item["category"],
             "title": item["title"],
             "desc": item["desc"]
         })
 
     system_prompt = """
-你是一位资深中文报纸副总编辑。
+你是一位国际顶级报刊主编。
 
-我会给你一个JSON数组，每个元素是一条新闻。
+请为每条新闻生成：
 
-请为每条新闻生成三个字段：
-official  （≤160字摘要，可保留原有专有名词）
-professional（110-130字，两段，必须全部使用简体中文）
-vernacular（90-110字，两段，必须全部使用简体中文）
+official（≤220字权威摘要）
+professional（220-280字，深度专业解析，两段，必须简体中文）
+vernacular（180-220字，通俗易懂，两段，必须简体中文）
 
-除official外，其余部分必须严格使用简体中文，不允许出现繁体字。
+要求：
+1. professional 必须有宏观背景 + 影响分析
+2. vernacular 必须像高质量公众号深度解读
+3. 不能空泛
+4. 不能套话
+5. 必须全部简体中文（除官方摘要可保留专有名词）
 
-必须返回标准JSON数组，不允许解释，不允许markdown，不允许额外文字。
+只返回JSON数组。
 """
 
     body = {
         "model": "glm-4-flash",
         "messages": [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": json.dumps(news_payload, ensure_ascii=False)}
+            {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}
         ],
-        "temperature": 0.6,
-        "max_tokens": 4000
+        "temperature": 0.7,
+        "max_tokens": 7000
     }
 
-    response = requests.post(url, headers=headers, json=body, timeout=60)
-    response.raise_for_status()
+    r = requests.post(url, headers=headers, json=body, timeout=90)
+    r.raise_for_status()
 
-    result = response.json()
-    content = result["choices"][0]["message"]["content"].strip()
-
+    content = r.json()["choices"][0]["message"]["content"]
     return json.loads(content)
 
-print("开始批量调用智谱…")
 analysis_list = batch_zhipu(news_list)
-print("智谱返回完成")
 
 # =============================
-# HTML 构建（全宽手机优化）
+# 高端报刊级 HTML 设计
 # =============================
 today = datetime.now().strftime('%Y年%m月%d日')
 
 msg = f"""<!DOCTYPE html>
-<html lang="zh-CN">
+<html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>每日新闻早报 {today}</title>
+<title>每日新闻</title>
 <style>
 body {{
-    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto;
-    background:#f3f4f6;
     margin:0;
-    padding:8px 6px;   /* 仅保留轻微边距 */
+    font-family:-apple-system,BlinkMacSystemFont,"Helvetica Neue",Arial;
+    background:#0f172a;
+    color:#111;
 }}
-.container {{
-    width:100%;
+.wrapper {{
+    background:#ffffff;
     max-width:100%;
-    margin:0 auto;
-    background:#fff;
-    border-radius:12px;
-    overflow:hidden;
 }}
-.header {{
-    background:linear-gradient(135deg,#1d4ed8,#60a5fa);
+.hero {{
+    background:linear-gradient(135deg,#0f172a,#1e293b);
     color:white;
-    padding:36px 20px 20px;
+    padding:60px 24px 40px;
     text-align:center;
 }}
-.content {{
-    padding:16px;
+.hero h1 {{
+    margin:0;
+    font-size:34px;
+    letter-spacing:2px;
 }}
-h2 {{
-    font-size:20px;
-    margin:26px 0 14px;
-    border-left:4px solid #3b82f6;
-    padding-left:8px;
-}}
-.card {{
-    border:1px solid #e5e7eb;
-    border-radius:10px;
-    margin-bottom:20px;
-    overflow:hidden;
-}}
-.card img {{
-    width:100%;
-    height:auto;
-    display:block;
-}}
-.card-body {{
-    padding:18px;
-}}
-.title {{
-    font-size:18px;
-    font-weight:700;
-    margin-bottom:12px;
-}}
-.section {{
-    font-size:14.5px;
-    margin:12px 0;
-    line-height:1.7;
-}}
-.link {{
-    text-align:right;
+.hero p {{
+    opacity:0.8;
     margin-top:10px;
-    font-size:14px;
 }}
+
+.section {{
+    padding:30px 22px;
+}}
+
+.category {{
+    font-size:22px;
+    font-weight:700;
+    margin:30px 0 20px;
+    border-left:5px solid #2563eb;
+    padding-left:10px;
+}}
+
+.article {{
+    margin-bottom:40px;
+}}
+
+.article img {{
+    width:100%;
+    border-radius:8px;
+    margin-bottom:15px;
+}}
+
+.title {{
+    font-size:20px;
+    font-weight:700;
+    margin-bottom:15px;
+}}
+
+.block {{
+    margin:15px 0;
+    line-height:1.9;
+    font-size:15.5px;
+}}
+
+.label {{
+    font-weight:700;
+    color:#2563eb;
+    display:block;
+    margin-bottom:6px;
+}}
+
 .footer {{
-    background:#f1f5f9;
-    padding:16px;
     text-align:center;
+    padding:25px;
+    background:#f1f5f9;
     font-size:13px;
 }}
 </style>
 </head>
 <body>
-<div class="container">
-<div class="header">
-<h1>每日新闻早报</h1>
-<div>{today}</div>
+<div class="wrapper">
+<div class="hero">
+<h1>GLOBAL DAILY BRIEF</h1>
+<p>{today} · 深度精选</p>
 </div>
-<div class="content">
+<div class="section">
 """
 
 current_cat = None
 
 for item, analysis in zip(news_list, analysis_list):
 
-    if item['category'] != current_cat:
-        msg += f"<h2>{item['category']}</h2>"
-        current_cat = item['category']
+    if item["category"] != current_cat:
+        msg += f'<div class="category">{item["category"]}</div>'
+        current_cat = item["category"]
 
-    img_tag = ""
-    if item['img_url']:
-        img_tag = f'<img src="{item["img_url"]}" alt="配图" onerror="this.style.display=\'none\';">'
+    img_tag = f'<img src="{item["img_url"]}" onerror="this.style.display=\'none\'">' if item["img_url"] else ""
 
     msg += f"""
-    <div class="card">
+    <div class="article">
         {img_tag}
-        <div class="card-body">
-            <div class="title">{item['title']}</div>
-            <div class="section"><strong>官方摘要：</strong><br>{analysis['official']}</div>
-            <div class="section"><strong>专业解析：</strong><br>{analysis['professional']}</div>
-            <div class="section"><strong>白话解读：</strong><br>{analysis['vernacular']}</div>
-            <div class="link"><a href="{item['link']}" target="_blank">阅读原文 →</a></div>
+        <div class="title">{item["title"]}</div>
+
+        <div class="block">
+            <span class="label">官方摘要</span>
+            {analysis['official']}
+        </div>
+
+        <div class="block">
+            <span class="label">专业解析</span>
+            {analysis['professional']}
+        </div>
+
+        <div class="block">
+            <span class="label">白话解读</span>
+            {analysis['vernacular']}
+        </div>
+
+        <div class="block">
+            <a href="{item['link']}" target="_blank">阅读原文 →</a>
         </div>
     </div>
     """
@@ -261,14 +272,14 @@ for item, analysis in zip(news_list, analysis_list):
 msg += """
 </div>
 <div class="footer">
-来源：NewsData.io 聚合
+NewsData.io 聚合 · 智谱AI深度解析
 </div>
 </div>
 </body>
 </html>
 """
 
-print(f"HTML 内容约 {len(msg.encode('utf-8'))/1024:.1f} KB")
+print("HTML长度：", len(msg))
 
 # =============================
 # PushPlus 推送
@@ -277,12 +288,12 @@ push_url = "https://www.pushplus.plus/send"
 
 payload = {
     "token": PUSHPLUS_TOKEN,
-    "title": f"每日新闻早报 {today}",
+    "title": f"每日新闻 {today}",
     "content": msg,
     "template": "html"
 }
 
-r = requests.post(push_url, json=payload, timeout=30)
+r = requests.post(push_url, json=payload, timeout=40)
 print("推送状态:", r.status_code)
 print("返回:", r.text)
 
