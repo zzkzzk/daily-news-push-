@@ -6,8 +6,16 @@ from datetime import datetime
 
 # 从环境变量获取密钥
 NEWSDATA_API_KEY = os.getenv('NEWSDATA_API_KEY')
-ZHIPU_API_KEY = os.getenv('ZHIPU_API_KEY')          # 智谱AI API Key
+ZHIPU_API_KEY = os.getenv('ZHIPU_API_KEY')
 PUSHPLUS_TOKEN = os.getenv('PUSHPLUS_TOKEN')
+
+# ── 调试：检查智谱 key 是否正确读取（运行后看控制台输出，确认后再注释掉） ──
+if ZHIPU_API_KEY:
+    print("智谱 API Key 前12个字符：", ZHIPU_API_KEY[:12])
+    print("智谱 API Key 长度：", len(ZHIPU_API_KEY))
+else:
+    print("警告：环境变量 ZHIPU_API_KEY 未设置或为空！")
+# ────────────────────────────────────────────────────────────────
 
 categories = [
     {'cn': '国际政治',     'q': '中国 OR China OR world politics OR geopolitics OR Taiwan OR Ukraine'},
@@ -34,6 +42,7 @@ for cat in categories:
     }
     try:
         resp = requests.get(url, params=params, timeout=15)
+        resp.raise_for_status()
         data = resp.json()
         if data.get('status') != 'success' or not data.get('results'):
             continue
@@ -43,13 +52,18 @@ for cat in categories:
             if valid_count >= 2:
                 break
             link = art.get('link', '')
-            if link in seen_links:
+            if not link or link in seen_links:
                 continue
             seen_links.add(link)
 
             title = (art.get('title') or '').strip()
             desc = (art.get('description') or art.get('content') or '').strip()
-            img_url = art.get('image_url', '')
+            img_url_raw = art.get('image_url')
+
+            # 安全处理 image_url，避免 NoneType 错误
+            img_url = ''
+            if isinstance(img_url_raw, str) and img_url_raw.startswith(('http://', 'https://')):
+                img_url = img_url_raw
 
             if len(title) < 10 or len(desc) < 40 or 'http' not in link:
                 continue
@@ -61,7 +75,7 @@ for cat in categories:
                 'title': title,
                 'desc': desc[:280],
                 'link': link,
-                'img_url': img_url if img_url.startswith('https') else '',
+                'img_url': img_url,
                 'lang': art.get('language', 'zh')
             })
             valid_count += 1
@@ -79,13 +93,14 @@ if len(news_list) < 14:
     }
     try:
         resp = requests.get("https://newsdata.io/api/1/latest", params=extra_params, timeout=15)
+        resp.raise_for_status()
         data = resp.json()
         if data.get('status') == 'success' and data.get('results'):
             for art in data['results']:
                 if len(news_list) >= 16:
                     break
                 link = art.get('link', '')
-                if link in seen_links:
+                if not link or link in seen_links:
                     continue
                 seen_links.add(link)
 
@@ -93,12 +108,17 @@ if len(news_list) < 14:
                 if len(title) < 12:
                     continue
 
+                img_url_raw = art.get('image_url')
+                img_url = ''
+                if isinstance(img_url_raw, str) and img_url_raw.startswith(('http://', 'https://')):
+                    img_url = img_url_raw
+
                 news_list.append({
                     'category': '综合要闻',
                     'title': title[:78] + '…' if len(title) > 80 else title,
                     'desc': (art.get('description') or art.get('content') or '')[:260],
                     'link': link,
-                    'img_url': art.get('image_url', '') if art.get('image_url', '').startswith('https') else '',
+                    'img_url': img_url,
                     'lang': art.get('language', 'zh')
                 })
     except Exception as e:
@@ -106,7 +126,7 @@ if len(news_list) < 14:
 
 print(f"收集到新闻：{len(news_list)} 条")
 
-# 智谱AI 处理 ── 强制简体中文输出
+# 智谱AI 处理
 def glm_process(item):
     text = f"语言：{item['lang']} 分类：{item['category']} 标题：{item['title']} 摘要：{item['desc'][:200]}"
 
@@ -118,7 +138,7 @@ def glm_process(item):
     }
     
     body = {
-        "model": "glm-4.7-flash",  # 可改为 "glm-5"、"glm-4.7"、"glm-4.6" 等
+        "model": "glm-4.7-flash",  # 可改为 glm-5 / glm-4.7 / glm-4.6 等
         "messages": [
             {
                 "role": "system",
@@ -148,7 +168,6 @@ def glm_process(item):
         r.raise_for_status()
         result = r.json()
         
-        # 智谱返回格式兼容 OpenAI
         content = result.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
         
         if not content:
@@ -156,8 +175,13 @@ def glm_process(item):
             
         return content
     
-    except requests.exceptions.RequestException as e:
-        print(f"智谱API请求异常: {e} | 状态码: {getattr(r, 'status_code', '未知')}")
+    except requests.exceptions.HTTPError as e:
+        print(f"智谱API HTTP错误: {e} | 状态码: {r.status_code}")
+        try:
+            error_detail = r.json().get("error", {})
+            print("错误详情:", error_detail)
+        except:
+            print("无法解析错误JSON")
         return "【官方摘要】\n（智谱服务异常）\n【专业解析】\n暂无\n【白话解析】\n暂无"
     except Exception as e:
         print(f"智谱处理异常: {e}")
