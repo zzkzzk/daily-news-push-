@@ -279,7 +279,7 @@ for item, analysis in zip(valid_news, valid_analysis):
     </div><hr>
 """
 
-html += """</div><div class="footer">来源：NewsData.io · 智谱GLM-4-Flash深度解读 · 自动推送</div></div></body></html>"""
+html += """</div><div class="footer">来源：NewsData.io · ZZK智能AI · 深度解读 · 自动推送</div></div></body></html>"""
 
 # =============================
 # PushPlus推送
@@ -293,4 +293,5 @@ r = requests.post("https://www.pushplus.plus/send", json={
 }, timeout=30)
 print(f"推送状态: {r.status_code}")
 print("🎉 执行完成！")
+
 
