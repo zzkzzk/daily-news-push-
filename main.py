@@ -3,6 +3,7 @@ import os
 import json
 import re
 from datetime import datetime
+import time
 
 # =============================
 # 环境变量诊断（智谱版）
@@ -140,7 +141,7 @@ if not news_list:
     exit()
 
 # =============================
-# 智谱 GLM 批量生成（02原风格）
+# 智谱 GLM 批量生成（安全稳定版）
 # =============================
 def batch_zhipu(items):
     url = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
@@ -154,14 +155,18 @@ def batch_zhipu(items):
         for i, item in enumerate(items)
     ]
 
-    system_prompt = """你是一位资深中文报纸副总编辑。
+    system_prompt = """你是一位资深中文报纸副总编辑（专业且风趣）。
 
 为每条新闻生成三个字段（全部简体中文）：
-- official：约150字官方摘要（客观中性）
-- professional：不少于250字专业深度解析（分2-3段，带背景、影响、趋势）
-- vernacular：不少于200字生动白话解读（分2段，像聊天一样通俗）
+- official：约120字官方摘要
+- professional：不少于200字专业解析（分段）
+- vernacular：不少于160字白话解读（分段）
 
-必须返回标准JSON数组，不要任何解释、markdown或额外文字。"""
+必须返回纯JSON数组。
+禁止markdown。
+禁止解释。
+只输出JSON。
+"""
 
     body = {
         "model": "glm-4-flash",
@@ -169,39 +174,80 @@ def batch_zhipu(items):
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}
         ],
-        "temperature": 0.65,
-        "max_tokens": 8500
+        "temperature": 0.6,
+        "max_tokens": 5000
     }
 
     try:
         print(f"🤖 调用智谱 GLM ({len(items)}条)...")
-        r = requests.post(url, headers=headers, json=body, timeout=130)
+        r = requests.post(url, headers=headers, json=body, timeout=120)
         print(f"   状态码: {r.status_code}")
         r.raise_for_status()
+
         content = r.json()["choices"][0]["message"]["content"]
         content = re.sub(r"```json|```", "", content).strip()
+
+        match = re.search(r"\[.*\]", content, re.S)
+        if match:
+            content = match.group(0)
+
+        result = json.loads(content)
+        if not isinstance(result, list):
+            raise ValueError("返回不是数组")
+
         print("✅ 智谱调用成功")
-        return json.loads(content)
+        return result
+
     except Exception as e:
-        print(f"❌ 智谱调用失败: {e}")
-        if 'r' in locals():
-            print(f"   响应: {r.text[:500]}")
-        return [{
-            "official": "暂无摘要（智谱API调用失败）",
-            "professional": "暂无专业解析（请检查ZHIPU_API_KEY额度/是否开通）",
-            "vernacular": "暂无白话解读（智谱免费额度非常充足，建议充值10元）"
-        } for _ in items]
+        print(f"❌ 批量失败，尝试单条重试: {e}")
 
+        results = []
+        for single in items:
+            try:
+                single_body = body.copy()
+                single_payload = [{
+                    "id": 0,
+                    "category": single["category"],
+                    "title": single["title"],
+                    "desc": single["desc"]
+                }]
+                single_body["messages"][1]["content"] = json.dumps(single_payload, ensure_ascii=False)
 
+                r = requests.post(url, headers=headers, json=single_body, timeout=90)
+                r.raise_for_status()
+                content = r.json()["choices"][0]["message"]["content"]
+                content = re.sub(r"```json|```", "", content).strip()
+                match = re.search(r"\[.*\]", content, re.S)
+                if match:
+                    content = match.group(0)
+
+                parsed = json.loads(content)
+                results.append(parsed[0])
+                print("   单条成功")
+
+            except Exception as ee:
+                print(f"   单条仍失败: {ee}")
+                results.append({
+                    "official": "暂无摘要（单条失败）",
+                    "professional": "暂无专业解析（单条失败）",
+                    "vernacular": "暂无白话解读（单条失败）"
+                })
+
+        return results
+
+# =============================
+# 分批调用智谱
+# =============================
 print("🤖 开始分批调用智谱...")
 analysis_list = []
-batch_size = 6
+batch_size = 3  # 调整为3，稳定性更高
 for i in range(0, len(news_list), batch_size):
     batch = news_list[i:i+batch_size]
     analysis_list.extend(batch_zhipu(batch))
+    time.sleep(1)  # 稳定延迟
 
 # =============================
-# HTML构建（02简洁线性风格 + 大图）
+# HTML构建
 # =============================
 today = datetime.now().strftime('%Y年%m月%d日')
 html = f"""<!DOCTYPE html>
