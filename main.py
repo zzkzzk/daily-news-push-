@@ -150,7 +150,7 @@ def batch_zhipu(items):
     payload = [{"id": i, "category": item["category"], "title": item["title"], "desc": item["desc"]}
                for i, item in enumerate(items)]
 
-    system_prompt = """你是一位资深中文报纸副总编辑。
+    system_prompt = """你是一位资深中文报纸副总编辑（风趣且幽默）。
 为每条新闻生成三个字段（全部简体中文）：
 - official：约120字官方摘要
 - professional：不少于200字专业解析（分段）
@@ -293,3 +293,4 @@ r = requests.post("https://www.pushplus.plus/send", json={
 }, timeout=30)
 print(f"推送状态: {r.status_code}")
 print("🎉 执行完成！")
+
