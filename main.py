@@ -141,7 +141,17 @@ if not news_list:
     exit()
 
 # =============================
-# 智谱 GLM 批量生成（安全 + 可剔除无效新闻）
+# 清理文本函数，去掉多余符号
+# =============================
+def clean_text(txt):
+    if not txt: return ""
+    txt = re.sub(r"^[\'\"]+|[\'\"]+$", "", txt)  # 去掉开头结尾引号
+    txt = re.sub(r"\[|\]", "", txt)             # 去掉列表符号 []
+    txt = re.sub(r"\s*,\s*", " ", txt)          # 替换逗号分隔
+    return txt.strip()
+
+# =============================
+# 智谱 GLM 批量生成（优化提示词）
 # =============================
 def batch_zhipu(items):
     url = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
@@ -150,12 +160,13 @@ def batch_zhipu(items):
     payload = [{"id": i, "category": item["category"], "title": item["title"], "desc": item["desc"]}
                for i, item in enumerate(items)]
 
-    system_prompt = """你是一位资深中文报纸副总编辑（风趣且幽默）。
-为每条新闻生成三个字段（全部简体中文）：
-- official：约120字官方摘要
-- professional：不少于200字专业解析（分段）
-- vernacular：不少于160字白话解读（分段）
-必须返回纯JSON数组。禁止markdown，禁止解释，只输出JSON。"""
+    system_prompt = """你是一位资深中文报纸副总编辑。
+请严格按照以下要求处理新闻，每条新闻生成三个字段（全部简体中文，风趣幽默）：
+1. official：约120字官方摘要，客观中性，每段以中文自然段落形式书写，不要使用Python/JSON列表格式或多余标点。
+2. professional：不少于200字专业深度解析，分2-3段，每段以中文自然段落形式书写，不要使用Python/JSON列表格式或多余标点。
+3. vernacular：不少于160字白话解读，分2段，像聊天一样通俗生动，适当调侃，每段以中文自然段落形式书写，不要使用Python/JSON列表格式或多余标点。
+必须返回标准JSON数组，每个元素为字典，键名为"official"、"professional"、"vernacular"。
+禁止使用Markdown、禁止输出解释、禁止多余符号或英文。"""
 
     body = {"model": "glm-4-flash",
             "messages": [{"role": "system", "content": system_prompt},
@@ -174,6 +185,11 @@ def batch_zhipu(items):
         result = json.loads(content)
         if not isinstance(result, list):
             raise ValueError("返回不是数组")
+        # 清理文本符号
+        for item in result:
+            item['official'] = clean_text(item.get('official'))
+            item['professional'] = clean_text(item.get('professional'))
+            item['vernacular'] = clean_text(item.get('vernacular'))
         return result
     except Exception as e:
         print(f"❌ 批量失败，尝试单条重试: {e}")
@@ -192,7 +208,11 @@ def batch_zhipu(items):
                 if match:
                     content = match.group(0)
                 parsed = json.loads(content)
-                results.append(parsed[0])
+                results.append({
+                    'official': clean_text(parsed[0].get('official')),
+                    'professional': clean_text(parsed[0].get('professional')),
+                    'vernacular': clean_text(parsed[0].get('vernacular'))
+                })
             except Exception as ee:
                 results.append({
                     "official": "",
@@ -223,13 +243,11 @@ for item, analysis in zip(news_list, analysis_list):
         valid_news.append(item)
         valid_analysis.append(analysis)
 
-# 如果有效新闻少于12条，则从 news_list 里补充还没使用的新闻（不含无效内容）
 idx = 0
 while len(valid_news) < 12 and idx < len(news_list):
     candidate = news_list[idx]
     if candidate not in valid_news:
         valid_news.append(candidate)
-        # 填充空分析，用户不会看到无内容新闻
         valid_analysis.append({
             "official": "暂无摘要",
             "professional": "暂无专业解析",
@@ -279,7 +297,7 @@ for item, analysis in zip(valid_news, valid_analysis):
     </div><hr>
 """
 
-html += """</div><div class="footer">来源：NewsData.io · ZZK智能AI · 深度解读 · 自动推送</div></div></body></html>"""
+html += """</div><div class="footer">来源：NewsData.io · 朱正坤AI · 深度解读 · 自动推送</div></div></body></html>"""
 
 # =============================
 # PushPlus推送
@@ -293,5 +311,3 @@ r = requests.post("https://www.pushplus.plus/send", json={
 }, timeout=30)
 print(f"推送状态: {r.status_code}")
 print("🎉 执行完成！")
-
-
