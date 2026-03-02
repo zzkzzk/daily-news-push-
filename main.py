@@ -5,23 +5,23 @@ import re
 from datetime import datetime
 
 # =============================
-# 环境变量诊断
+# 环境变量诊断（智谱版）
 # =============================
 NEWSDATA_API_KEY = os.getenv('NEWSDATA_API_KEY')
-QWEN_API_KEY = os.getenv('QWEN_API_KEY')
+ZHIPU_API_KEY = os.getenv('ZHIPU_API_KEY')
 PUSHPLUS_TOKEN = os.getenv('PUSHPLUS_TOKEN')
 
 print("🔍 环境变量诊断:")
 print(f"   NEWSDATA_API_KEY: {'✅ 有' if NEWSDATA_API_KEY else '❌ 无'}")
-print(f"   QWEN_API_KEY: {'✅ 有' if QWEN_API_KEY else '❌ 无'} (长度:{len(QWEN_API_KEY or '')})")
+print(f"   ZHIPU_API_KEY: {'✅ 有' if ZHIPU_API_KEY else '❌ 无'} (长度:{len(ZHIPU_API_KEY or '')})")
 print(f"   PUSHPLUS_TOKEN: {'✅ 有' if PUSHPLUS_TOKEN else '❌ 无'}")
 
-if not NEWSDATA_API_KEY or not QWEN_API_KEY or not PUSHPLUS_TOKEN:
-    print("❌ 缺少环境变量，退出")
+if not NEWSDATA_API_KEY or not ZHIPU_API_KEY or not PUSHPLUS_TOKEN:
+    print("❌ 缺少关键环境变量，退出")
     exit(1)
 
 # =============================
-# 新闻抓取（极致诊断版）
+# 新闻分类 + 抓取（超级诊断版）
 # =============================
 categories = [
     {'cn': '国际政治', 'q': '中国 OR China OR Taiwan OR geopolitics'},
@@ -92,22 +92,17 @@ for cat in categories:
 print(f"\n✅ 第一阶段收集到 {len(news_list)} 条新闻")
 
 # =============================
-# 超强 Fallback（如果还是很少）
+# 超强 Fallback
 # =============================
 if len(news_list) < 6:
     print("🛡️ 启动强力 fallback...")
     fallback_queries = ["", "中国", "world", "news", "China", "AI"]
     for fq in fallback_queries:
-        if len(news_list) >= 12:
-            break
+        if len(news_list) >= 12: break
         try:
             resp = requests.get(
                 "https://newsdata.io/api/1/latest",
-                params={
-                    'apikey': NEWSDATA_API_KEY,
-                    'q': fq,
-                    'size': 10
-                },
+                params={'apikey': NEWSDATA_API_KEY, 'q': fq, 'size': 10},
                 timeout=20
             )
             data = resp.json()
@@ -134,9 +129,8 @@ if not news_list:
     today = datetime.now().strftime('%Y年%m月%d日')
     html = f"""<!DOCTYPE html><html><head><meta charset="UTF-8"><title>每日新闻 {today}</title></head><body>
     <h1>每日新闻早报 {today}</h1>
-    <p>今日暂无新新闻（可能 NewsData.io 免费额度已用完或暂无更新）。</p>
-    <p>额度每日北京时间早上8点自动重置，请明天再试。</p>
-    <p>来源：NewsData.io</p></body></html>"""
+    <p>今日暂无新新闻（NewsData.io 免费额度可能已用完或暂无更新）。</p>
+    <p>额度每日北京时间早上8点自动重置，明天再试即可。</p></body></html>"""
     requests.post("https://www.pushplus.plus/send", json={
         "token": PUSHPLUS_TOKEN,
         "title": f"每日新闻 {today}（暂无更新）",
@@ -146,47 +140,75 @@ if not news_list:
     exit()
 
 # =============================
-# Qwen 生成解读（保持上版稳定配置）
+# 智谱 GLM 批量生成（02原风格）
 # =============================
-def call_qwen_batch(batch):
-    url = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions"
-    headers = {"Authorization": f"Bearer {QWEN_API_KEY}", "Content-Type": "application/json"}
-    payload = [{"id": i, "category": item["category"], "title": item["title"], "desc": item["desc"]} for i, item in enumerate(batch)]
-    system_prompt = """你是一位资深中文报纸副总编辑。
-为每条新闻生成三个字段（全部简体中文）：
-- official：约150字官方摘要
-- professional：不少于250字专业深度解析（2-3段）
-- vernacular：不少于200字白话解读（2段）
-只返回纯JSON数组，不要任何其他文字。"""
-    body = {
-        "model": "qwen-plus",
-        "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}],
-        "temperature": 0.7,
-        "max_tokens": 6000
+def batch_zhipu(items):
+    url = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {ZHIPU_API_KEY}",
+        "Content-Type": "application/json"
     }
+
+    payload = [
+        {"id": i, "category": item["category"], "title": item["title"], "desc": item["desc"]}
+        for i, item in enumerate(items)
+    ]
+
+    system_prompt = """你是一位资深中文报纸副总编辑。
+
+为每条新闻生成三个字段（全部简体中文）：
+- official：约150字官方摘要（客观中性）
+- professional：不少于250字专业深度解析（分2-3段，带背景、影响、趋势）
+- vernacular：不少于200字生动白话解读（分2段，像聊天一样通俗）
+
+必须返回标准JSON数组，不要任何解释、markdown或额外文字。"""
+
+    body = {
+        "model": "glm-4-flash",
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}
+        ],
+        "temperature": 0.65,
+        "max_tokens": 8500
+    }
+
     try:
-        r = requests.post(url, headers=headers, json=body, timeout=90)
+        print(f"🤖 调用智谱 GLM ({len(items)}条)...")
+        r = requests.post(url, headers=headers, json=body, timeout=130)
+        print(f"   状态码: {r.status_code}")
         r.raise_for_status()
         content = r.json()["choices"][0]["message"]["content"]
         content = re.sub(r"```json|```", "", content).strip()
+        print("✅ 智谱调用成功")
         return json.loads(content)
     except Exception as e:
-        print(f"❌ Qwen 本批失败: {e}")
-        return [{"official": "API调用失败", "professional": "请检查额度/开通服务", "vernacular": "阿里云百炼充值10元即可恢复"} for _ in batch]
+        print(f"❌ 智谱调用失败: {e}")
+        if 'r' in locals():
+            print(f"   响应: {r.text[:500]}")
+        return [{
+            "official": "暂无摘要（智谱API调用失败）",
+            "professional": "暂无专业解析（请检查ZHIPU_API_KEY额度/是否开通）",
+            "vernacular": "暂无白话解读（智谱免费额度非常充足，建议充值10元）"
+        } for _ in items]
 
-print("🤖 开始分批调用 Qwen...")
+
+print("🤖 开始分批调用智谱...")
 analysis_list = []
-for i in range(0, len(news_list), 6):
-    batch = news_list[i:i+6]
-    analysis_list.extend(call_qwen_batch(batch))
+batch_size = 6
+for i in range(0, len(news_list), batch_size):
+    batch = news_list[i:i+batch_size]
+    analysis_list.extend(batch_zhipu(batch))
 
 # =============================
-# HTML + 推送（02风格）
+# HTML构建（02简洁线性风格 + 大图）
 # =============================
 today = datetime.now().strftime('%Y年%m月%d日')
 html = f"""<!DOCTYPE html>
 <html lang="zh-CN">
-<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>每日新闻早报 {today}</title>
 <style>
 body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#f8f9fa;margin:0;padding:10px 8px;line-height:1.75;}}
@@ -199,7 +221,8 @@ body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
 .section{{margin:17px 0;font-size:15.4px;}} .section strong{{color:#1e40af;}}
 .link{{text-align:right;margin-top:14px;}} hr{{border:none;border-top:1px solid #e5e7eb;margin:34px 0 28px;}}
 .footer{{background:#f1f5f9;padding:22px;text-align:center;font-size:13.5px;color:#64748b;}}
-</style></head>
+</style>
+</head>
 <body>
 <div class="container">
 <div class="header"><h1>每日新闻早报</h1><div class="date">{today}</div></div>
@@ -219,8 +242,11 @@ for item, analysis in zip(news_list, analysis_list):
     </div><hr>
 """
 
-html += """</div><div class="footer">来源：NewsData.io · 通义千问 Qwen-plus · 自动推送</div></div></body></html>"""
+html += """</div><div class="footer">来源：NewsData.io · 智谱GLM-4-Flash深度解读 · 自动推送</div></div></body></html>"""
 
+# =============================
+# PushPlus推送
+# =============================
 print("📤 正在推送...")
 r = requests.post("https://www.pushplus.plus/send", json={
     "token": PUSHPLUS_TOKEN,
