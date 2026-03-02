@@ -4,33 +4,33 @@ import json
 import time
 from datetime import datetime
 
-# 从环境变量获取密钥
+# =============================
+# 环境变量
+# =============================
 NEWSDATA_API_KEY = os.getenv('NEWSDATA_API_KEY')
 ZHIPU_API_KEY = os.getenv('ZHIPU_API_KEY')
 PUSHPLUS_TOKEN = os.getenv('PUSHPLUS_TOKEN')
 
-# ── 调试：检查智谱 key 是否正确读取（运行后看控制台输出，确认后再注释掉） ──
-if ZHIPU_API_KEY:
-    print("智谱 API Key 前12个字符：", ZHIPU_API_KEY[:12])
-    print("智谱 API Key 长度：", len(ZHIPU_API_KEY))
-else:
-    print("警告：环境变量 ZHIPU_API_KEY 未设置或为空！")
-# ────────────────────────────────────────────────────────────────
-
+# =============================
+# 新闻分类
+# =============================
 categories = [
-    {'cn': '国际政治',     'q': '中国 OR China OR world politics OR geopolitics OR Taiwan OR Ukraine'},
-    {'cn': '财经经济',     'q': '中国经济 OR China economy OR global market OR finance OR trade war'},
-    {'cn': '科技前沿',     'q': '中国科技 OR AI China OR chip OR semiconductor OR quantum OR Huawei'},
-    {'cn': '体育赛事',     'q': '中国体育 OR Olympics OR football OR basketball OR 奥运 OR 世界杯'},
-    {'cn': '文化娱乐',     'q': '中国文化 OR entertainment OR movie OR music OR festival OR celebrity'},
-    {'cn': '社会民生',     'q': '中国社会 OR education OR housing OR employment OR population OR 民生'},
-    {'cn': '健康医疗',     'q': '中国医疗 OR health China OR cancer OR vaccine OR aging OR 疫情'},
-    {'cn': '环境气候',     'q': '中国环境 OR climate change OR carbon OR renewable OR 碳中和 OR pollution'}
+    {'cn': '国际政治', 'q': '中国 OR China OR world politics OR geopolitics OR Taiwan OR Ukraine'},
+    {'cn': '财经经济', 'q': '中国经济 OR China economy OR global market OR finance OR trade war'},
+    {'cn': '科技前沿', 'q': '中国科技 OR AI China OR chip OR semiconductor OR quantum OR Huawei'},
+    {'cn': '体育赛事', 'q': '中国体育 OR Olympics OR football OR basketball OR 奥运 OR 世界杯'},
+    {'cn': '文化娱乐', 'q': '中国文化 OR entertainment OR movie OR music OR festival OR celebrity'},
+    {'cn': '社会民生', 'q': '中国社会 OR education OR housing OR employment OR population OR 民生'},
+    {'cn': '健康医疗', 'q': '中国医疗 OR health China OR cancer OR vaccine OR aging OR 疫情'},
+    {'cn': '环境气候', 'q': '中国环境 OR climate change OR carbon OR renewable OR 碳中和 OR pollution'}
 ]
 
 news_list = []
 seen_links = set()
 
+# =============================
+# 获取新闻
+# =============================
 for cat in categories:
     url = "https://newsdata.io/api/1/latest"
     params = {
@@ -40,10 +40,11 @@ for cat in categories:
         'size': 5,
         'removeduplicate': '1'
     }
+
     try:
-        resp = requests.get(url, params=params, timeout=15)
-        resp.raise_for_status()
+        resp = requests.get(url, params=params, timeout=20)
         data = resp.json()
+
         if data.get('status') != 'success' or not data.get('results'):
             continue
 
@@ -51,251 +52,158 @@ for cat in categories:
         for art in data['results']:
             if valid_count >= 2:
                 break
+
             link = art.get('link', '')
-            if not link or link in seen_links:
+            if link in seen_links:
                 continue
             seen_links.add(link)
 
             title = (art.get('title') or '').strip()
             desc = (art.get('description') or art.get('content') or '').strip()
-            img_url_raw = art.get('image_url')
-
-            # 安全处理 image_url，避免 NoneType 错误
-            img_url = ''
-            if isinstance(img_url_raw, str) and img_url_raw.startswith(('http://', 'https://')):
-                img_url = img_url_raw
+            img_url = art.get('image_url', '')
 
             if len(title) < 10 or len(desc) < 40 or 'http' not in link:
                 continue
+
             if len(title) > 80:
                 title = title[:78] + '…'
 
             news_list.append({
                 'category': cat['cn'],
                 'title': title,
-                'desc': desc[:280],
+                'desc': desc[:260],
                 'link': link,
-                'img_url': img_url,
+                'img_url': img_url if img_url.startswith('https') else '',
                 'lang': art.get('language', 'zh')
             })
+
             valid_count += 1
 
     except Exception as e:
         print(f"[{cat['cn']}] 获取失败: {e}")
 
-# 补齐（上限16条）
-if len(news_list) < 14:
-    extra_params = {
-        'apikey': NEWSDATA_API_KEY,
-        'q': '中国 OR China OR 热点 OR 要闻',
-        'language': 'zh',
-        'size': 12
-    }
-    try:
-        resp = requests.get("https://newsdata.io/api/1/latest", params=extra_params, timeout=15)
-        resp.raise_for_status()
-        data = resp.json()
-        if data.get('status') == 'success' and data.get('results'):
-            for art in data['results']:
-                if len(news_list) >= 16:
-                    break
-                link = art.get('link', '')
-                if not link or link in seen_links:
-                    continue
-                seen_links.add(link)
-
-                title = (art.get('title') or '').strip()
-                if len(title) < 12:
-                    continue
-
-                img_url_raw = art.get('image_url')
-                img_url = ''
-                if isinstance(img_url_raw, str) and img_url_raw.startswith(('http://', 'https://')):
-                    img_url = img_url_raw
-
-                news_list.append({
-                    'category': '综合要闻',
-                    'title': title[:78] + '…' if len(title) > 80 else title,
-                    'desc': (art.get('description') or art.get('content') or '')[:260],
-                    'link': link,
-                    'img_url': img_url,
-                    'lang': art.get('language', 'zh')
-                })
-    except Exception as e:
-        print(f"补齐失败: {e}")
-
 print(f"收集到新闻：{len(news_list)} 条")
 
-# 智谱AI 处理
-def glm_process(item):
-    text = f"语言：{item['lang']} 分类：{item['category']} 标题：{item['title']} 摘要：{item['desc'][:200]}"
+# =============================
+# 智谱 API 调用（带限速 + 重试）
+# =============================
+def zhipu_process(item):
+
+    prompt_text = (
+        f"语言：{item['lang']} "
+        f"分类：{item['category']} "
+        f"标题：{item['title']} "
+        f"摘要：{item['desc'][:200]}"
+    )
 
     url = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
-    
+
     headers = {
         "Authorization": f"Bearer {ZHIPU_API_KEY}",
         "Content-Type": "application/json"
     }
-    
+
     body = {
-        "model": "glm-4.7-flash",  # 可改为 glm-5 / glm-4.7 / glm-4.6 等
+        "model": "glm-4-flash",
         "messages": [
             {
                 "role": "system",
                 "content": (
-                    "你是一位资深中文报纸副总编辑。处理新闻时**必须**使用**简体中文**输出，除【官方摘要】可能保留原文轻微繁体/英文专有名词外，"
-                    "【专业解析】和【白话解析】两段**强制全部使用简体中文**，即使原文是繁体或英文。\n\n"
-                    "输出严格格式，不得多余文字、空格、符号、开头结尾说明：\n\n"
-                    "【官方摘要】\n不超过160字的精炼中文摘要（若非中文则翻译后浓缩）\n\n"
-                    "【专业解析】\n客观中性、社论风格，110–130字，2段，必须简体中文\n\n"
-                    "【白话解析】\n通俗接地气，像聊天解释，90–110字，2段，必须简体中文\n\n"
-                    "禁止使用markdown、列表、过多感叹号、口语化标题、任何非指定格式内容。"
+                    "你是一位资深中文报纸副总编辑。必须使用简体中文输出。\n\n"
+                    "严格格式：\n"
+                    "【官方摘要】\n"
+                    "≤160字\n\n"
+                    "【专业解析】\n"
+                    "110-130字，两段\n\n"
+                    "【白话解析】\n"
+                    "90-110字，两段\n"
                 )
             },
             {
                 "role": "user",
-                "content": f"处理这条新闻：{text}"
+                "content": f"处理这条新闻：{prompt_text}"
             }
         ],
-        "temperature": 0.65,
-        "top_p": 0.92,
-        "max_tokens": 420,
-        "stream": False
+        "temperature": 0.6,
+        "max_tokens": 600
     }
-    
-    try:
-        r = requests.post(url, headers=headers, json=body, timeout=25)
-        r.raise_for_status()
-        result = r.json()
-        
-        content = result.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
-        
-        if not content:
-            return "【官方摘要】\n（内容为空）\n【专业解析】\n暂无\n【白话解析】\n暂无"
-            
-        return content
-    
-    except requests.exceptions.HTTPError as e:
-        print(f"智谱API HTTP错误: {e} | 状态码: {r.status_code}")
+
+    max_retries = 5
+    delay = 2  # 初始延迟
+
+    for attempt in range(max_retries):
         try:
-            error_detail = r.json().get("error", {})
-            print("错误详情:", error_detail)
-        except:
-            print("无法解析错误JSON")
-        return "【官方摘要】\n（智谱服务异常）\n【专业解析】\n暂无\n【白话解析】\n暂无"
-    except Exception as e:
-        print(f"智谱处理异常: {e}")
-        return "【官方摘要】\n（解析异常）\n【专业解析】\n暂无\n【白话解析】\n暂无"
+            response = requests.post(url, headers=headers, json=body, timeout=40)
+
+            # 429 处理
+            if response.status_code == 429:
+                print(f"触发速率限制，等待 {delay} 秒后重试...")
+                time.sleep(delay)
+                delay *= 2
+                continue
+
+            response.raise_for_status()
+            result = response.json()
+
+            output = result["choices"][0]["message"]["content"].strip()
+
+            # 限速控制（避免下一次太快）
+            time.sleep(2)
+
+            return output
+
+        except requests.exceptions.Timeout:
+            print(f"请求超时，第 {attempt+1} 次重试...")
+            time.sleep(delay)
+            delay *= 2
+
+        except Exception as e:
+            print(f"智谱处理异常: {e}")
+            time.sleep(delay)
+            delay *= 2
+
+    return "【官方摘要】\n解析失败\n【专业解析】\n暂无\n【白话解析】\n暂无"
 
 
-# HTML 构建
+# =============================
+# 构建 HTML
+# =============================
 today = datetime.now().strftime('%Y年%m月%d日')
 
-msg = f"""<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>每日新闻早报 {today}</title>
-<style>
-    body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; background:#f9fafb; color:#111827; line-height:1.75; margin:0; padding:12px 8px; }}
-    .container {{ max-width:920px; margin:0 auto; background:#ffffff; border-radius:16px; overflow:hidden; box-shadow:0 10px 38px rgba(0,0,0,0.08); }}
-    .header {{ background:linear-gradient(135deg, #1d4ed8, #60a5fa); color:white; padding:44px 24px 24px; text-align:center; }}
-    .header h1 {{ margin:0; font-size:30px; font-weight:700; letter-spacing:0.6px; }}
-    .header .date {{ margin:12px 0 0; font-size:15.5px; opacity:0.94; }}
-    .content {{ padding:24px 20px; }}
-    h2 {{ color:#111827; font-size:23px; font-weight:700; margin:36px 0 18px; padding-left:12px; border-left:5px solid #3b82f6; }}
-    .card {{ background:#ffffff; border:1px solid #e5e7eb; border-radius:12px; margin-bottom:28px; overflow:hidden; transition:border-color 0.25s ease; }}
-    .card:hover {{ border-color:#bfdbfe; }}
-    .card img {{ width:100%; max-height:210px; object-fit:cover; display:block; }}
-    .card-body {{ padding:24px; }}
-    .title {{ font-size:20.5px; font-weight:700; color:#111827; margin:0 0 16px; line-height:1.42; white-space:normal; word-break:break-word; }}
-    .section {{ font-size:15.2px; color:#4b5563; margin:16px 0; }}
-    .section strong {{ color:#1d4ed8; font-weight:600; }}
-    .link {{ text-align:right; margin-top:12px; font-size:14.2px; }}
-    .link a {{ color:#2563eb; text-decoration:none; font-weight:500; }}
-    .link a:hover {{ text-decoration:underline; }}
-    .footer {{ background:#f1f5f9; padding:20px; text-align:center; font-size:13px; color:#6b7280; border-top:1px solid #e5e7eb; }}
-    
-    @media (max-width: 768px) {{
-        body {{ padding:8px 4px; }}
-        .container {{ max-width:100%; border-radius:0; box-shadow:none; }}
-        .header {{ padding:36px 18px 20px; }}
-        .header h1 {{ font-size:26px; }}
-        .content {{ padding:18px 16px; }}
-        h2 {{ font-size:21px; margin:28px 0 16px; }}
-        .card {{ margin-bottom:24px; border-radius:10px; }}
-        .card-body {{ padding:22px 24px; }}
-        .title {{ font-size:19px; }}
-        .section {{ font-size:15px; margin:14px 0; }}
-        .link {{ font-size:13.8px; }}
-    }}
-    @media (max-width: 480px) {{
-        .card-body {{ padding:20px 22px; }}
-        .title {{ font-size:18.2px; }}
-        .section {{ font-size:14.6px; }}
-    }}
-</style>
-</head>
-<body>
-<div class="container">
-    <div class="header">
-        <h1>每日新闻早报</h1>
-        <div class="date">{today}　全球精选要闻</div>
-    </div>
-    <div class="content">
-"""
+msg = f"<h1>每日新闻早报 {today}</h1>"
 
-current_cat = None
 for item in news_list:
-    if item['category'] != current_cat:
-        msg += f'<h2>{item["category"]}</h2>'
-        current_cat = item['category']
 
-    parsed = glm_process(item)
+    parsed = zhipu_process(item)
+
+    official = professional = vernacular = "解析异常"
 
     parts = parsed.replace('\n\n', '\n').split('【')
-    official = professional = vernacular = "（解析异常）"
-
     for p in parts:
         p = p.strip()
         if p.startswith('官方摘要】'):
-            official = p.replace('官方摘要】', '').strip()[:160]
+            official = p.replace('官方摘要】', '').strip()
         elif p.startswith('专业解析】'):
-            professional = p.replace('专业解析】', '').strip()[:130]
+            professional = p.replace('专业解析】', '').strip()
         elif p.startswith('白话解析】'):
-            vernacular = p.replace('白话解析】', '').strip()[:110]
-
-    img_tag = f'<img src="{item["img_url"]}" alt="配图" onerror="this.style.display=\'none\';">' if item['img_url'] else ''
+            vernacular = p.replace('白话解析】', '').strip()
 
     msg += f"""
-        <div class="card">
-            {img_tag}
-            <div class="card-body">
-                <div class="title">{item['title']}</div>
-                <div class="section"><strong>官方摘要</strong><br>{official}</div>
-                <div class="section"><strong>专业解析</strong><br>{professional}</div>
-                <div class="section"><strong>白话解读</strong><br>{vernacular}</div>
-                <div class="link"><a href="{item['link']}" target="_blank">阅读原文 →</a></div>
-            </div>
-        </div>
+    <h2>{item['category']} - {item['title']}</h2>
+    <p><b>官方摘要：</b>{official}</p>
+    <p><b>专业解析：</b>{professional}</p>
+    <p><b>白话解析：</b>{vernacular}</p>
+    <p><a href="{item['link']}">阅读原文</a></p>
+    <hr>
     """
 
-msg += """
-    </div>
-    <div class="footer">
-        <p>来源：NewsData.io 聚合（Reuters / BBC / 新华社 / 财新 / 澎湃等）</p>
-        <p>每日北京时间早8:30推送　欢迎提出改进建议</p>
-    </div>
-</div>
-</body>
-</html>
-"""
+print(f"HTML 内容约 {len(msg.encode('utf-8'))/1024:.1f} KB")
 
-print(f"HTML 内容约 {len(msg.encode('utf-8')) / 1024:.1f} KB")
-
-# PushPlus 发送
+# =============================
+# PushPlus 推送
+# =============================
 push_url = "https://www.pushplus.plus/send"
+
 payload = {
     "token": PUSHPLUS_TOKEN,
     "title": f"每日新闻早报 {today}",
@@ -304,23 +212,21 @@ payload = {
 }
 
 success = False
-for attempt in range(1, 4):
+
+for attempt in range(3):
     try:
         r = requests.post(push_url, json=payload, timeout=20)
-        print(f"推送尝试 {attempt} | 状态: {r.status_code}")
-        print("返回:", r.text[:280])
-        if r.status_code == 200 and ('code":200' in r.text or '成功' in r.text):
-            print("推送成功")
+        print(f"推送尝试 {attempt+1} | 状态: {r.status_code}")
+        print("返回:", r.text[:200])
+        if r.status_code == 200 and '"code":200' in r.text:
             success = True
             break
     except Exception as e:
-        print(f"推送异常 {attempt}: {e}")
-    if attempt < 3:
-        time.sleep(8)
+        print("推送异常:", e)
+
+    time.sleep(8)
 
 if not success:
     print("推送未确认成功")
-    with open("last_news.html", "w", encoding="utf-8") as f:
-        f.write(msg)
 
 print(f"执行结束　新闻总数：{len(news_list)}")
