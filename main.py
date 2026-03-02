@@ -1,6 +1,5 @@
 import requests
 import os
-import json
 import time
 from datetime import datetime
 
@@ -85,7 +84,7 @@ for cat in categories:
 print(f"收集到新闻：{len(news_list)} 条")
 
 # =============================
-# 智谱 API 调用（带限速 + 重试）
+# 智谱处理函数（带限速+指数退避）
 # =============================
 def zhipu_process(item):
 
@@ -111,12 +110,9 @@ def zhipu_process(item):
                 "content": (
                     "你是一位资深中文报纸副总编辑。必须使用简体中文输出。\n\n"
                     "严格格式：\n"
-                    "【官方摘要】\n"
-                    "≤160字\n\n"
-                    "【专业解析】\n"
-                    "110-130字，两段\n\n"
-                    "【白话解析】\n"
-                    "90-110字，两段\n"
+                    "【官方摘要】\n≤160字\n\n"
+                    "【专业解析】\n110-130字，两段\n\n"
+                    "【白话解析】\n90-110字，两段\n"
                 )
             },
             {
@@ -128,51 +124,124 @@ def zhipu_process(item):
         "max_tokens": 600
     }
 
-    max_retries = 5
-    delay = 2  # 初始延迟
-
-    for attempt in range(max_retries):
+    delay = 2
+    for attempt in range(5):
         try:
             response = requests.post(url, headers=headers, json=body, timeout=40)
 
-            # 429 处理
             if response.status_code == 429:
-                print(f"触发速率限制，等待 {delay} 秒后重试...")
+                print(f"触发速率限制，等待 {delay} 秒...")
                 time.sleep(delay)
                 delay *= 2
                 continue
 
             response.raise_for_status()
             result = response.json()
-
             output = result["choices"][0]["message"]["content"].strip()
 
-            # 限速控制（避免下一次太快）
-            time.sleep(2)
-
+            time.sleep(2)  # 控制频率
             return output
 
-        except requests.exceptions.Timeout:
-            print(f"请求超时，第 {attempt+1} 次重试...")
-            time.sleep(delay)
-            delay *= 2
-
         except Exception as e:
-            print(f"智谱处理异常: {e}")
+            print(f"智谱异常: {e}")
             time.sleep(delay)
             delay *= 2
 
     return "【官方摘要】\n解析失败\n【专业解析】\n暂无\n【白话解析】\n暂无"
 
-
 # =============================
-# 构建 HTML
+# 构建 HTML（含图片）
 # =============================
 today = datetime.now().strftime('%Y年%m月%d日')
 
-msg = f"<h1>每日新闻早报 {today}</h1>"
+msg = f"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>每日新闻早报 {today}</title>
+<style>
+body {{
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto;
+    background:#f9fafb;
+    margin:0;
+    padding:12px 8px;
+}}
+.container {{
+    max-width:920px;
+    margin:0 auto;
+    background:#fff;
+    border-radius:16px;
+    overflow:hidden;
+    box-shadow:0 10px 38px rgba(0,0,0,0.08);
+}}
+.header {{
+    background:linear-gradient(135deg,#1d4ed8,#60a5fa);
+    color:white;
+    padding:44px 24px 24px;
+    text-align:center;
+}}
+.content {{
+    padding:24px 20px;
+}}
+h2 {{
+    font-size:22px;
+    margin:32px 0 16px;
+    border-left:5px solid #3b82f6;
+    padding-left:10px;
+}}
+.card {{
+    border:1px solid #e5e7eb;
+    border-radius:12px;
+    margin-bottom:28px;
+    overflow:hidden;
+}}
+.card img {{
+    width:100%;
+    max-height:220px;
+    object-fit:cover;
+    display:block;
+}}
+.card-body {{
+    padding:22px;
+}}
+.title {{
+    font-size:20px;
+    font-weight:700;
+    margin-bottom:14px;
+}}
+.section {{
+    font-size:15px;
+    margin:14px 0;
+}}
+.link {{
+    text-align:right;
+    margin-top:12px;
+}}
+.footer {{
+    background:#f1f5f9;
+    padding:20px;
+    text-align:center;
+    font-size:13px;
+}}
+</style>
+</head>
+<body>
+<div class="container">
+<div class="header">
+<h1>每日新闻早报</h1>
+<div>{today}</div>
+</div>
+<div class="content">
+"""
+
+current_cat = None
 
 for item in news_list:
+
+    if item['category'] != current_cat:
+        msg += f"<h2>{item['category']}</h2>"
+        current_cat = item['category']
 
     parsed = zhipu_process(item)
 
@@ -188,14 +257,32 @@ for item in news_list:
         elif p.startswith('白话解析】'):
             vernacular = p.replace('白话解析】', '').strip()
 
+    img_tag = ""
+    if item['img_url']:
+        img_tag = f'<img src="{item["img_url"]}" alt="配图" onerror="this.style.display=\'none\';">'
+
     msg += f"""
-    <h2>{item['category']} - {item['title']}</h2>
-    <p><b>官方摘要：</b>{official}</p>
-    <p><b>专业解析：</b>{professional}</p>
-    <p><b>白话解析：</b>{vernacular}</p>
-    <p><a href="{item['link']}">阅读原文</a></p>
-    <hr>
+    <div class="card">
+        {img_tag}
+        <div class="card-body">
+            <div class="title">{item['title']}</div>
+            <div class="section"><strong>官方摘要：</strong><br>{official}</div>
+            <div class="section"><strong>专业解析：</strong><br>{professional}</div>
+            <div class="section"><strong>白话解读：</strong><br>{vernacular}</div>
+            <div class="link"><a href="{item['link']}" target="_blank">阅读原文 →</a></div>
+        </div>
+    </div>
     """
+
+msg += """
+</div>
+<div class="footer">
+来源：NewsData.io 聚合
+</div>
+</div>
+</body>
+</html>
+"""
 
 print(f"HTML 内容约 {len(msg.encode('utf-8'))/1024:.1f} KB")
 
@@ -212,7 +299,6 @@ payload = {
 }
 
 success = False
-
 for attempt in range(3):
     try:
         r = requests.post(push_url, json=payload, timeout=20)
@@ -223,7 +309,6 @@ for attempt in range(3):
             break
     except Exception as e:
         print("推送异常:", e)
-
     time.sleep(8)
 
 if not success:
