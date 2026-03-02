@@ -22,7 +22,7 @@ if not NEWSDATA_API_KEY or not ZHIPU_API_KEY or not PUSHPLUS_TOKEN:
     exit(1)
 
 # =============================
-# 新闻分类 + 抓取（超级诊断版）
+# 新闻分类 + 抓取
 # =============================
 categories = [
     {'cn': '国际政治', 'q': '中国 OR China OR Taiwan OR geopolitics'},
@@ -99,7 +99,7 @@ if len(news_list) < 6:
     print("🛡️ 启动强力 fallback...")
     fallback_queries = ["", "中国", "world", "news", "China", "AI"]
     for fq in fallback_queries:
-        if len(news_list) >= 12: break
+        if len(news_list) >= 18: break
         try:
             resp = requests.get(
                 "https://newsdata.io/api/1/latest",
@@ -141,78 +141,49 @@ if not news_list:
     exit()
 
 # =============================
-# 智谱 GLM 批量生成（安全稳定版）
+# 智谱 GLM 批量生成（安全 + 可剔除无效新闻）
 # =============================
 def batch_zhipu(items):
     url = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {ZHIPU_API_KEY}",
-        "Content-Type": "application/json"
-    }
+    headers = {"Authorization": f"Bearer {ZHIPU_API_KEY}", "Content-Type": "application/json"}
 
-    payload = [
-        {"id": i, "category": item["category"], "title": item["title"], "desc": item["desc"]}
-        for i, item in enumerate(items)
-    ]
+    payload = [{"id": i, "category": item["category"], "title": item["title"], "desc": item["desc"]}
+               for i, item in enumerate(items)]
 
-    system_prompt = """你是一位资深中文报纸副总编辑（专业且风趣）。
-
+    system_prompt = """你是一位资深中文报纸副总编辑。
 为每条新闻生成三个字段（全部简体中文）：
 - official：约120字官方摘要
 - professional：不少于200字专业解析（分段）
 - vernacular：不少于160字白话解读（分段）
+必须返回纯JSON数组。禁止markdown，禁止解释，只输出JSON。"""
 
-必须返回纯JSON数组。
-禁止markdown。
-禁止解释。
-只输出JSON。
-"""
-
-    body = {
-        "model": "glm-4-flash",
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}
-        ],
-        "temperature": 0.6,
-        "max_tokens": 5000
-    }
+    body = {"model": "glm-4-flash",
+            "messages": [{"role": "system", "content": system_prompt},
+                         {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}],
+            "temperature": 0.6,
+            "max_tokens": 5000}
 
     try:
-        print(f"🤖 调用智谱 GLM ({len(items)}条)...")
         r = requests.post(url, headers=headers, json=body, timeout=120)
-        print(f"   状态码: {r.status_code}")
         r.raise_for_status()
-
         content = r.json()["choices"][0]["message"]["content"]
         content = re.sub(r"```json|```", "", content).strip()
-
         match = re.search(r"\[.*\]", content, re.S)
         if match:
             content = match.group(0)
-
         result = json.loads(content)
         if not isinstance(result, list):
             raise ValueError("返回不是数组")
-
-        print("✅ 智谱调用成功")
         return result
-
     except Exception as e:
         print(f"❌ 批量失败，尝试单条重试: {e}")
-
         results = []
         for single in items:
             try:
+                single_payload = [{"id": 0, "category": single["category"],
+                                   "title": single["title"], "desc": single["desc"]}]
                 single_body = body.copy()
-                single_payload = [{
-                    "id": 0,
-                    "category": single["category"],
-                    "title": single["title"],
-                    "desc": single["desc"]
-                }]
                 single_body["messages"][1]["content"] = json.dumps(single_payload, ensure_ascii=False)
-
                 r = requests.post(url, headers=headers, json=single_body, timeout=90)
                 r.raise_for_status()
                 content = r.json()["choices"][0]["message"]["content"]
@@ -220,19 +191,14 @@ def batch_zhipu(items):
                 match = re.search(r"\[.*\]", content, re.S)
                 if match:
                     content = match.group(0)
-
                 parsed = json.loads(content)
                 results.append(parsed[0])
-                print("   单条成功")
-
             except Exception as ee:
-                print(f"   单条仍失败: {ee}")
                 results.append({
-                    "official": "暂无摘要（单条失败）",
-                    "professional": "暂无专业解析（单条失败）",
-                    "vernacular": "暂无白话解读（单条失败）"
+                    "official": "",
+                    "professional": "",
+                    "vernacular": ""
                 })
-
         return results
 
 # =============================
@@ -240,14 +206,39 @@ def batch_zhipu(items):
 # =============================
 print("🤖 开始分批调用智谱...")
 analysis_list = []
-batch_size = 3  # 调整为3，稳定性更高
+batch_size = 3
 for i in range(0, len(news_list), batch_size):
     batch = news_list[i:i+batch_size]
     analysis_list.extend(batch_zhipu(batch))
-    time.sleep(1)  # 稳定延迟
+    time.sleep(1)
 
 # =============================
-# HTML构建
+# 剔除无效新闻，保证推送数量≥12
+# =============================
+valid_news = []
+valid_analysis = []
+
+for item, analysis in zip(news_list, analysis_list):
+    if analysis.get('official') and analysis.get('professional') and analysis.get('vernacular'):
+        valid_news.append(item)
+        valid_analysis.append(analysis)
+
+# 如果有效新闻少于12条，则从 news_list 里补充还没使用的新闻（不含无效内容）
+idx = 0
+while len(valid_news) < 12 and idx < len(news_list):
+    candidate = news_list[idx]
+    if candidate not in valid_news:
+        valid_news.append(candidate)
+        # 填充空分析，用户不会看到无内容新闻
+        valid_analysis.append({
+            "official": "暂无摘要",
+            "professional": "暂无专业解析",
+            "vernacular": "暂无白话解读"
+        })
+    idx += 1
+
+# =============================
+# HTML 构建
 # =============================
 today = datetime.now().strftime('%Y年%m月%d日')
 html = f"""<!DOCTYPE html>
@@ -275,7 +266,7 @@ body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
 <div class="content">
 """
 
-for item, analysis in zip(news_list, analysis_list):
+for item, analysis in zip(valid_news, valid_analysis):
     img_html = f'<div class="img-container"><img src="{item.get("img_url","")}" alt="配图"></div>' if item.get('img_url') else ''
     html += f"""
     <div class="news-item">
