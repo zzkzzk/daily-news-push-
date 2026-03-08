@@ -103,7 +103,7 @@ if len(news_list) < 6:
         try:
             resp = requests.get(
                 "https://newsdata.io/api/1/latest",
-                params={'apikey': NEWSDATA_API_KEY, 'q': fq, 'size': 10},
+                params={'apikey': NEWSDATA_API_KEY,'country': 'cn', 'q': fq, 'size': 10},
                 timeout=20
             )
             data = resp.json()
