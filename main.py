@@ -25,12 +25,12 @@ if not NEWSDATA_API_KEY or not ZHIPU_API_KEY or not PUSHPLUS_TOKEN:
 # 新闻分类 + 抓取
 # =============================
 categories = [
-    {'cn': '国际政治', 'q': '中国 OR China OR Taiwan OR geopolitics OR 习近平'},
-    {'cn': '财经经济', 'q': '中国经济 OR China economy OR 股市 OR inflation OR 贸易'},
+    {'cn': '国际政治', 'q': '中国 OR 美国 OR Taiwan OR geopolitics OR 习近平'},
+    {'cn': '财经经济', 'q': '中国经济 OR 房价 OR 股市 OR 汽车比亚迪 OR 贸易'},
     {'cn': '科技前沿', 'q': 'AI OR 人工智能 OR XIAOMI OR APPLE OR 新能源 OR 量子'},
-    {'cn': '社会民生', 'q': '中国社会 OR 民生 OR 教育 OR 房价 OR 就业'},
-    {'cn': '文化娱乐', 'q': 'NBA OR 中国文化 OR 娱乐 OR CBA OR 电影 OR 明星'},
-    {'cn': '健康环境', 'q': '医疗 OR 北京 OR 北京密云 OR 气候 OR 健康 OR pollution'}
+    {'cn': '社会民生', 'q': '地质调查 OR 北京住房 OR 教育 OR 房价 OR 就业'},
+    {'cn': '文化娱乐', 'q': '篮球 OR nba OR 娱乐 OR CBA OR 电影 OR 明星'},
+    {'cn': '健康环境', 'q': '北京密云区 OR 北京 OR 北京密云 OR 气候 OR 健康 OR pollution'}
 ]
 
 news_list = []
